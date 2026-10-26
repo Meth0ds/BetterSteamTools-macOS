@@ -1,0 +1,26 @@
+# Local builds and dependency caches
+.DS_Store
+**/.build/
+**/.swiftpm/
+**/.deps/
+/build*/
+/.cache/
+/outputs/
+/fixtures/
+/local/
+
+# Local credentials and signing material (never commit)
+.env
+.env.*
+*.p12
+*.pfx
+*.key
+*.mobileprovision
+AuthKey_*.p8
+*-private-key*
+
+# Workspace-only Steam / CrossOver binaries and personal data
+Steam.app/
+CrossOver.app/
+*.dmg
+*.xcarchive

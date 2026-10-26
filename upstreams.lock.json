@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "BetterSteamTools": {
+    "repository": "https://github.com/madoiscool/BetterSteamTools",
+    "commit": "4747385bdc7c92fb422e63419a5093566b3bf626",
+    "path": "projects/BetterSteamTools",
+    "import": "git-subtree-full-history",
+    "license": "GPL-3.0"
+  },
+  "LuaTools": {
+    "repository": "https://github.com/madoiscool/LuaTools",
+    "commit": "946125981a7addb6150e83886443cc8ddb68931b",
+    "path": "projects/LuaTools",
+    "import": "git-subtree-full-history",
+    "license": "MIT"
+  },
+  "NotProton": {
+    "repository": "https://github.com/NotProtonNot/NotProton",
+    "commit": "b2f49e46ee874013b2818c32405e713f6fbfb68e",
+    "external": true
+  },
+  "LuaToolsPlugin": {
+    "repository": "https://github.com/madoiscool/LTSP",
+    "release": "v2.2",
+    "asset": "plugin.zip",
+    "sha256": "b872baa364562cc57421819f46eaede64c18131cdb0acccee42b460dcba367bb",
+    "licenseFileInAsset": false
+  }
+}
