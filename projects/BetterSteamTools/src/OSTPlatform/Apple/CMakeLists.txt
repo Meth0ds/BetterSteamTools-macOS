@@ -1,0 +1,6 @@
+add_library(OSTPlatformMac STATIC Basic.mm Http.mm DirectoryWatch.mm Memory.cpp Process.cpp Arm64Relocator.cpp CodePatch.cpp Detour.cpp ../Numbers.cpp ../Log.cpp)
+set_target_properties(OSTPlatformMac PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+target_include_directories(OSTPlatformMac PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_compile_features(OSTPlatformMac PUBLIC cxx_std_20)
+target_compile_options(OSTPlatformMac PRIVATE -fobjc-arc)
+target_link_libraries(OSTPlatformMac PUBLIC "-framework Foundation" "-framework CoreServices")

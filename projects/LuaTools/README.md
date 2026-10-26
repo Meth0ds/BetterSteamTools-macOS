@@ -62,3 +62,15 @@ MIT. See [LICENSE](LICENSE).
 
 <img width="100%" alt="928c14bad5bbc258894b050af1e17ba8" src="https://github.com/user-attachments/assets/90ed4a2b-6fec-4afa-a56d-4983ea190ddb" />
 
+
+## macOS (Apple Silicon)
+
+El port macOS todavía no tiene paridad con el cliente WPF. Consulta `macos/IMPLEMENTATION_STATUS.md`. La implementación nativa SwiftUI se encuentra en `macos/`:
+
+```bash
+cd macos
+swift build -c release
+swift run LuaToolsMac
+```
+
+La variante macOS usa `~/Library/Application Support/Steam`, instala Lua en `config/stplug-in`, conserva los manifiestos en `depotcache` y expone el backend local en `127.0.0.1:6767`. El paquete `macos/plugin-macos` mantiene el frontend de LuaTools, adapta el backend Lua a rutas POSIX y arranca `LuaTools.app`; El cargador objetivo es LuaLoader, siguiendo la aplicación Windows actual; la adaptación nativa de su arranque y el transporte CDP todavía requiere integración y aceptación. Millennium queda como compatibilidad heredada.

@@ -24,3 +24,6 @@ Steam.app/
 CrossOver.app/
 *.dmg
 *.xcarchive
+
+**/build-macos/
+**/build-macos-*/

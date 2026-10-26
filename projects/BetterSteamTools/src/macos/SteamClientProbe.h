@@ -1,0 +1,18 @@
+#pragma once
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+
+namespace BST::Mac {
+inline constexpr const char* steamBuild = "1792618285";
+struct SteamClientProbe {
+    std::filesystem::path path;
+    uintptr_t ownershipEntry = 0;
+    std::shared_ptr<void> module;
+};
+// Pins the loaded image for the returned probe's lifetime. Validates on-disk
+// SHA-256, ARM64 load commands, code-section bounds and 32 original entry bytes.
+std::optional<SteamClientProbe> probeSteamClient(std::string& diagnostic);
+}

@@ -1,0 +1,4 @@
+#pragma once
+// Build-time trust root. Empty defaults intentionally accept no manifest.
+inline constexpr const char* bstManifestKeyID = "@BST_MANIFEST_KEY_ID@";
+inline constexpr const char* bstManifestPublicKeyHex = "@BST_MANIFEST_PUBLIC_KEY_HEX@";

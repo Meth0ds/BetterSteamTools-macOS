@@ -1,0 +1,2 @@
+projects/*/macos/** text=auto eol=lf
+projects/*/macos/**/*.png binary

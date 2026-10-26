@@ -1,0 +1,49 @@
+name: macOS
+
+on:
+  pull_request:
+    paths:
+      - 'macos/**'
+  push:
+    branches: [main]
+    paths:
+      - 'macos/**'
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Build LuaTools macOS
+        run: swift build --package-path macos -c release
+      - name: Run macOS self-tests
+        run: swift run --package-path macos LuaToolsMacSelfTest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test CDP JavaScript bridge
+        run: |
+          node macos/Tests/CDP/bridge.test.cjs
+          node --check macos/plugin-macos/public/luatools.js
+      - name: Test native CDP over real WebSockets
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cdp-tests"
+          "$RUNNER_TEMP/cdp-tests/bin/python" -m pip install -r macos/Tests/CDP/requirements.txt
+          swift build --package-path macos --product LuaToolsCDPSelfTest
+          BIN_DIR="$(swift build --package-path macos --show-bin-path)"
+          "$RUNNER_TEMP/cdp-tests/bin/python" macos/Tests/CDP/fake_inspector.py -- "$BIN_DIR/LuaToolsCDPSelfTest"
+      - name: Validate plugin manifest
+        run: python3 -m json.tool macos/plugin-macos/plugin.json >/dev/null
+      - name: Install Lua syntax checker
+        run: brew install lua
+      - name: Check Lua files
+        run: |
+          LUAC="$(brew --prefix lua)/bin/luac"
+          for f in macos/plugin-macos/backend/*.lua; do
+            "$LUAC" -p "$f"
+          done
+
+      - name: Test macOS plugin lifecycle and RPC
+        run: lua macos/Tests/Plugin/PluginTests.lua "$PWD/macos/plugin-macos/backend"

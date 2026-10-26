@@ -44,3 +44,7 @@ build-release.ps1
 *.p12
 *.pem
 *.snk
+
+# SwiftPM
+.build/
+.DS_Store

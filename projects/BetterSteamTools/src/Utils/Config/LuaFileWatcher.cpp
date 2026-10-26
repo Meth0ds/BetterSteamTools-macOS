@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <filesystem>
 #include <thread>
 #include <unordered_map>
 
@@ -91,7 +92,7 @@ std::vector<FileChange> ToFileChanges(
     result.reserve(changes.size());
     for (const auto& change : changes) {
         if (change.relativePath.empty()) continue;
-        result.push_back({dir + "\\" + change.relativePath, FromPlatformAction(change.action)});
+        result.push_back({(std::filesystem::path(dir) / change.relativePath).string(), FromPlatformAction(change.action)});
     }
     return result;
 }

@@ -23,3 +23,7 @@ build/
 !.deps/**/*.dll
 /examples
 /build-noupd
+
+# SwiftPM
+.build/
+.DS_Store

@@ -291,3 +291,29 @@ build.bat
 
 ## Disclaimer
 This project is provided for research and educational purposes only. You are responsible for complying with local laws, platform terms of service, and software licenses.
+
+## macOS (Apple Silicon)
+
+El port macOS está en desarrollo y todavía no tiene paridad con Windows. Consulta `macos/IMPLEMENTATION_STATUS.md` para ver las pruebas y los bloqueos de entrega. Se incluye un paquete Swift en `macos/` y un bootstrap Mach-O fail-closed:
+
+```bash
+cd macos
+swift build -c release
+swift run bst-macos doctor
+swift run bst-macos plan <appid>
+# La activación conserva NotProton y otras dylibs existentes:
+swift run bst-macos install --dylib /ruta/BetterSteamTools.dylib --manifest /ruta/approved-build.json
+```
+
+El selector automático lee `appmanifest_*.acf`, las bibliotecas de Steam y los binarios instalados. Los juegos que contienen Mach-O o un bundle `.app` macOS se marcan como nativos; los que contienen `.exe` se envían a NotProton/CrossOver. Un caso ambiguo exige `--mode native` o `--mode crossover`. La herramienta no instala CrossOver ni modifica una build de Steam sin validar.
+
+`src/macos/` genera el bootstrap `BetterSteamTools.dylib` con CMake en macOS. Los hooks de Steam específicos de una build deben añadirse únicamente junto con un manifiesto firmado en `macos/signatures/`; el bootstrap registra y rechaza builds no identificadas.
+
+Las excepciones persistentes se guardan en `~/Library/Application Support/BetterSteamTools/routing.json`:
+
+```json
+{
+  "defaultMode": "auto",
+  "apps": { "123456": "native", "654321": "crossover" }
+}
+```

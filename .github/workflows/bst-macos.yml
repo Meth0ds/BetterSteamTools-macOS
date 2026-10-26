@@ -1,0 +1,53 @@
+name: BetterSteamTools macOS
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/bst-macos.yml'
+      - 'projects/BetterSteamTools/macos/**'
+      - 'projects/BetterSteamTools/src/CMakeLists.txt'
+      - 'projects/BetterSteamTools/src/macos/**'
+      - 'projects/BetterSteamTools/src/OSTPlatform/Apple/**'
+      - 'projects/BetterSteamTools/tools/macos/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bst-macos.yml'
+      - 'projects/BetterSteamTools/macos/**'
+      - 'projects/BetterSteamTools/src/CMakeLists.txt'
+      - 'projects/BetterSteamTools/src/macos/**'
+      - 'projects/BetterSteamTools/src/OSTPlatform/Apple/**'
+      - 'projects/BetterSteamTools/tools/macos/**'
+
+defaults:
+  run:
+    working-directory: projects/BetterSteamTools
+
+jobs:
+  swift:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Build macOS package
+        run: swift build --package-path macos -c release
+      - name: Run macOS self-tests
+        run: swift run --package-path macos bst-macos-selftest
+  dylib:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require Apple Silicon
+        run: test "$(uname -m)" = arm64
+      - name: Configure
+        run: cmake -S src -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build bootstrap dylib
+        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest
+      - name: Test ARM64 anchor analysis
+        run: python3 -m unittest discover -s tools/macos -p "test_*.py"
+      - name: Test native platform backend
+        run: ctest --test-dir build-macos/macos --output-on-failure
+      - name: Test transactional signing and exact signed-bundle restoration
+        run: swift run --package-path macos bst-macos-selftest --codesign-dylib "$PWD/build-macos/macos/BetterSteamTools.dylib"

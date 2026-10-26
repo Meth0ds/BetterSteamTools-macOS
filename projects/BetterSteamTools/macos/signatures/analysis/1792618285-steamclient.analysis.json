@@ -1,0 +1,65 @@
+{
+  "format": "analysis-only",
+  "runtimeApproved": false,
+  "sha256": "b9d62be2ac64b77dc77e1d19eefcf3880df99495c7db85b30623095310b6a6bd",
+  "architecture": "arm64",
+  "candidates": [
+    {
+      "anchor": "CheckAppOwnership",
+      "references": [
+        {
+          "functionRVA": "0xa63738",
+          "referenceRVA": "0xa63784",
+          "anchorRVA": "0x15d5099"
+        }
+      ],
+      "uniqueFunctionCandidate": true
+    },
+    {
+      "anchor": "BuildDepotDependency",
+      "references": [
+        {
+          "functionRVA": "0x5b0a98",
+          "referenceRVA": "0x5b0af8",
+          "anchorRVA": "0x1589830"
+        }
+      ],
+      "uniqueFunctionCandidate": true
+    },
+    {
+      "anchor": "CWebSocketConnection::BBuildAndAsyncSendFrame",
+      "references": [
+        {
+          "functionRVA": "0x1283eec",
+          "referenceRVA": "0x1283f38",
+          "anchorRVA": "0x1638daa"
+        }
+      ],
+      "uniqueFunctionCandidate": true
+    },
+    {
+      "anchor": "CCMInterface::RecvPkt",
+      "references": [
+        {
+          "functionRVA": "0x695bb4",
+          "referenceRVA": "0x695bf4",
+          "anchorRVA": "0x159fc6d"
+        }
+      ],
+      "uniqueFunctionCandidate": true
+    }
+  ],
+  "steamBuild": "1792618285",
+  "module": "steamclient.dylib",
+  "source": {
+    "manifest": "https://client-update.akamai.steamstatic.com/steam_client_osx",
+    "package": "bins_client_osx.zip.8494317737a1ee5eeb237e8defb24902dfe799a1",
+    "packageSHA256": "a33530b9c07c20fa56969ba8d83897019d2ef9c41b2c70a210fcdddb36edb4cb"
+  },
+  "validationRequired": [
+    "ARM64 calling convention and argument types",
+    "object field layout and sizes",
+    "coexistence with NotProton trampolines",
+    "runtime Steam and game integration"
+  ]
+}

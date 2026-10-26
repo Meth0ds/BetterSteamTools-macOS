@@ -1,4 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
+if(CMAKE_HOST_APPLE)
+    if(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "15.0" CACHE STRING "Minimum supported macOS version")
+    endif()
+    if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "macOS target architecture")
+    endif()
+endif()
 project(OpenSteamTool VERSION 1.0.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -20,8 +28,11 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 
-if(NOT WIN32)
-    message(STATUS "OpenSteamTool: no targets on non-Windows platforms; skipping.")
+if(APPLE)
+    add_subdirectory(macos)
+    return()
+elseif(NOT WIN32)
+    message(STATUS "OpenSteamTool: no targets on this platform; skipping.")
     return()
 endif()
 

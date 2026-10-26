@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/SteamClientHomebrew/Millennium/main/src/sys/plugin-schema.json",
+  "name": "luatools",
+  "common_name": "LuaTools",
+  "description": "LuaTools Steam Plugin!",
+  "version": "2.2-macos.1",
+  "useBackend": true,
+  "backendType": "lua",
+  "include": [
+    "public"
+  ],
+  "platforms": [
+    "macos-arm64"
+  ],
+  "minLuaTools": "1.0.0"
+}
