@@ -1,5 +1,6 @@
 #include "include/Process.h"
 #include "include/Encoding.h"
+#include "ProcessArguments.h"
 #include <libproc.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
@@ -50,6 +51,7 @@ std::optional<Arguments> arguments(uint32_t pid) {
     return result;
 }
 }
+
 std::optional<uint64_t> GetCreationTime(uint32_t pid) {
     proc_bsdinfo info{};
     if (pid > static_cast<uint32_t>(std::numeric_limits<pid_t>::max()) || proc_pidinfo(static_cast<int>(pid), PROC_PIDTBSDINFO, 0, &info, sizeof info) != sizeof info) return std::nullopt;
@@ -149,5 +151,12 @@ bool LaunchDetachedHidden(const std::string& commandLine) {
     try { std::thread([child] { while (waitpid(child, nullptr, 0) == -1 && errno == EINTR) {} }).detach(); }
     catch (...) { /* Child was created; a process-wide SIGCHLD handler may also reap it. */ }
     return true;
+}
+}
+
+namespace OSTPlatform::Apple {
+std::optional<std::vector<std::string>> GetProcessArguments(uint32_t pid) {
+    const auto value = Process::arguments(pid);
+    return value ? std::optional(value->args) : std::nullopt;
 }
 }

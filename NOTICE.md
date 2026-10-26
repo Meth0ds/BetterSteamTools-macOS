@@ -7,3 +7,6 @@
 - **Steam y CrossOver**: productos de sus respectivos titulares. Sus binarios, contenidos de cuentas y licencias no forman parte de este repositorio.
 
 La licencia de una carpeta o dependencia no se sustituye por una licencia global del monorepo. Las modificaciones permanecen identificadas mediante commits del port y documentación de estado.
+
+- **Lua 5.5.0**: dependencia de compilación del backend macOS desde https://www.lua.org/ftp/lua-5.5.0.tar.gz; SHA-256 `57ccc32bbbd005cab75bcc52444052535af691789dba2b9016d5c50640d68b3d`. Se conserva la licencia MIT incluida en su distribución al preparar los paquetes. El código de la dependencia se obtiene durante la compilación y no se añade al árbol Git.
+- **toml++ v3.4.0**: dependencia del parser TOML compartido, usando la receta original del proyecto y su licencia MIT.

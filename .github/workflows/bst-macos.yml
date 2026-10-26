@@ -8,6 +8,10 @@ on:
       - 'projects/BetterSteamTools/macos/**'
       - 'projects/BetterSteamTools/src/CMakeLists.txt'
       - 'projects/BetterSteamTools/src/macos/**'
+      - 'projects/BetterSteamTools/src/Utils/Config/**'
+      - 'projects/BetterSteamTools/src/Utils/Tickets/**'
+      - 'projects/BetterSteamTools/src/Utils/SteamMetadata/**'
+      - 'projects/BetterSteamTools/src/cmake/**'
       - 'projects/BetterSteamTools/src/OSTPlatform/Apple/**'
       - 'projects/BetterSteamTools/tools/macos/**'
   push:
@@ -17,6 +21,10 @@ on:
       - 'projects/BetterSteamTools/macos/**'
       - 'projects/BetterSteamTools/src/CMakeLists.txt'
       - 'projects/BetterSteamTools/src/macos/**'
+      - 'projects/BetterSteamTools/src/Utils/Config/**'
+      - 'projects/BetterSteamTools/src/Utils/Tickets/**'
+      - 'projects/BetterSteamTools/src/Utils/SteamMetadata/**'
+      - 'projects/BetterSteamTools/src/cmake/**'
       - 'projects/BetterSteamTools/src/OSTPlatform/Apple/**'
       - 'projects/BetterSteamTools/tools/macos/**'
 
@@ -44,7 +52,7 @@ jobs:
       - name: Configure
         run: cmake -S src -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build bootstrap dylib
-        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest
+        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest bst-lua-configuration-selftest
       - name: Test ARM64 anchor analysis
         run: python3 -m unittest discover -s tools/macos -p "test_*.py"
       - name: Test native platform backend

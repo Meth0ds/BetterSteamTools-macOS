@@ -1,4 +1,4 @@
-#include "dllmain.h"
+#include "Utils/Logging/Log.h"
 #include "OSTPlatform/include/Http.h"
 #include "OSTPlatform/include/Numbers.h"
 #include "Utils/Config/LuaConfig.h"
@@ -6,10 +6,14 @@
 #include "Utils/Tickets/AppTicket.h"
 
 #include <lua.hpp>
+#ifdef __APPLE__
+#include "macos/MacLuaSupport.h"
+#endif
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -631,10 +635,16 @@ namespace LuaConfig{
         if (!g_hasManifestCodeFunc || !g_lua_state)
             return false;
 
+#ifdef __APPLE__
+        BST::Mac::LuaSupport::ExecutionBudget budget(g_lua_state);
+#endif
         lua_getglobal(g_lua_state, "fetch_manifest_code");
         lua_pushinteger(g_lua_state, static_cast<lua_Integer>(gid));
 
         if (lua_pcall(g_lua_state, 1, 1, 0) != LUA_OK) {
+#ifdef __APPLE__
+            BST::Mac::LuaSupport::Report("fetch_manifest_code", lua_tostring(g_lua_state, -1));
+#endif
             LOG_MANIFEST_WARN("fetch_manifest_code({}) error: {}", gid,
                              lua_tostring(g_lua_state, -1));
             lua_pop(g_lua_state, 1);
@@ -682,12 +692,18 @@ namespace LuaConfig{
         if (!g_hasManifestCodeFuncEx || !g_lua_state)
             return false;
 
+#ifdef __APPLE__
+        BST::Mac::LuaSupport::ExecutionBudget budget(g_lua_state);
+#endif
         lua_getglobal(g_lua_state, "fetch_manifest_code_ex");
         lua_pushinteger(g_lua_state, static_cast<lua_Integer>(app_id));
         lua_pushinteger(g_lua_state, static_cast<lua_Integer>(depot_id));
         lua_pushinteger(g_lua_state, static_cast<lua_Integer>(gid));
 
         if (lua_pcall(g_lua_state, 3, 1, 0) != LUA_OK) {
+#ifdef __APPLE__
+            BST::Mac::LuaSupport::Report("fetch_manifest_code_ex", lua_tostring(g_lua_state, -1));
+#endif
             LOG_MANIFEST_WARN("fetch_manifest_code_ex({}, {}, {}) error: {}", app_id, depot_id, gid,
                              lua_tostring(g_lua_state, -1));
             lua_pop(g_lua_state, 1);
@@ -826,6 +842,11 @@ namespace LuaConfig{
             g_fileMtime[filePath] = mtime;
         }
 
+#ifdef __APPLE__
+        // A Lua file is one chunk: locals, closures and multiline expressions
+        // must retain their language semantics across source lines.
+        BST::Mac::LuaSupport::ExecuteFile(g_lua_state, path);
+#else
         std::string chunk, line;
         int lineNo = 0;
         while (std::getline(file, line)) {
@@ -854,6 +875,8 @@ namespace LuaConfig{
         if (!chunk.empty()) {
             LOG_WARN("{}: incomplete statement at end of file", path.filename().string());
         }
+
+#endif
 
         // Check for manifest code functions after parsing.
         g_hasManifestCodeFunc = false;
@@ -923,6 +946,16 @@ namespace LuaConfig{
     }
 
     void ReloadDirectories(const std::vector<std::string>& directories, bool clearPendingAdditions) {
+#ifdef __APPLE__
+        std::unordered_set<AppId_t> previousDepots;
+        for (const auto& [id, _] : DepotKeySet) previousDepots.insert(id);
+        Cleanup(); g_hasManifestCodeFuncEx = false;
+        DepotKeySet.clear(); AccessTokenSet.clear(); LegacyCDKeySet.clear(); PinnedApps.clear(); ManifestOverrides.clear();
+        StatSteamIdSet.clear(); ProcessNameAppIdMap.clear(); ForcedDenuvoSet.clear(); EticketUrl.clear();
+        g_currentFile.clear(); g_fileDepots.clear(); g_fileManifestOverrides.clear(); g_fileParseSequence.clear();
+        g_nextFileParseSequence = 0; g_depotRefCount.clear(); g_fileMtime.clear(); g_purchaseTime.clear();
+        g_pendingRemovals.clear(); g_pendingAdditions.clear(); g_func_registry.clear();
+#endif
         if (!Initialize()) return;
 
         std::unordered_set<std::string> activeFiles;
@@ -961,6 +994,11 @@ namespace LuaConfig{
             ParseFile(filePath);
         }
 
+#ifdef __APPLE__
+        g_pendingRemovals.clear(); g_pendingAdditions.clear();
+        for (AppId_t id : previousDepots) if (!DepotKeySet.contains(id)) g_pendingRemovals.push_back(id);
+        for (const auto& [id, _] : DepotKeySet) if (!previousDepots.contains(id)) g_pendingAdditions.push_back(id);
+#endif
         if (clearPendingAdditions) {
             g_pendingAdditions.clear();
         }

@@ -29,6 +29,8 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 
 
 if(APPLE)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LogMacros.cmake")
     add_subdirectory(macos)
     return()
 elseif(NOT WIN32)
@@ -114,6 +116,7 @@ add_library(OpenSteamTool SHARED
 
     # Shared utilities
     Utils/Tickets/AppTicket.cpp
+    Utils/Tickets/AppTicketStorage.cpp
     Utils/Tickets/LegacyCDKey.cpp
     Utils/Tickets/EticketClient.cpp
     Utils/Config/Config.cpp

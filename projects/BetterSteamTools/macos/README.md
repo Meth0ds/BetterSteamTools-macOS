@@ -11,3 +11,5 @@ Esta implementación arm64 separa la integración de Steam macOS del backend Win
 - validación SHA-256 de una build de Steam mediante manifiesto.
 
 El target CMake `BetterSteamToolsMac` es un bootstrap dylib fail-closed. No activa hooks de Steam para builds sin firma publicada: cada módulo de hooks debe llegar acompañado de una firma y pruebas para la build exacta de Steam.
+
+The native CMake target now shares the original Windows Lua, TOML configuration, stats and manifest-client sources. Lua files run as complete chunks; native ticket writes use a BST-specific Keychain namespace. `bst-lua-configuration-selftest` uses a real isolated temporary Keychain and the actual Lua interpreter. This is separate from Steam ABI/game acceptance, which remains pending.

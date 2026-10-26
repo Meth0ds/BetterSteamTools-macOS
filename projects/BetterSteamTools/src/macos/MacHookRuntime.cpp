@@ -1,4 +1,5 @@
 #include "MacHookRuntime.h"
+#include "MacConfiguration.h"
 #include "SteamClientProbe.h"
 #include "RuntimeManifestVerifier.h"
 #include "BSTManifestTrust.h"
@@ -8,8 +9,6 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
-#include <regex>
-#include <set>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -23,8 +22,6 @@
 
 namespace {
 constexpr uint32_t kReleased = 4;
-std::mutex g_configMutex;
-std::set<uint32_t> g_configuredApps;
 std::once_flag g_start;
 std::ofstream g_log;
 
@@ -42,45 +39,14 @@ void log(const std::string& message) {
     if (g_log) g_log << message << '\n' << std::flush;
 }
 
-bool validAppID(const std::string& text, uint32_t& output) {
-    if (text.empty() || text.size() > 10 || !std::all_of(text.begin(), text.end(), [](unsigned char c) { return c >= '0' && c <= '9'; })) return false;
-    try {
-        const auto value = std::stoull(text);
-        if (!value || value > UINT32_MAX) return false;
-        output = static_cast<uint32_t>(value); return true;
-    } catch (...) { return false; }
-}
-
-void reloadLuaAppIDs() {
+BST::Mac::MacConfiguration g_configuration;
+bool reloadLuaConfiguration() {
     const char* home = getenv("HOME");
-    if (!home) return;
-    const auto directory = std::filesystem::path(home) / "Library/Application Support/Steam/config/stplug-in";
-    std::set<uint32_t> next;
-    std::error_code error;
-    if (std::filesystem::exists(directory, error)) {
-        static const std::regex addApp(R"(\baddappid\s*\(\s*([0-9]+))", std::regex::ECMAScript | std::regex::icase);
-        for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
-            if (error || entry.is_symlink(error) || !entry.is_regular_file(error) || entry.path().extension() != ".lua") continue;
-            const auto size = entry.file_size(error);
-            if (error || size > 16 * 1024 * 1024) continue;
-            std::ifstream file(entry.path());
-            if (!file) continue;
-            const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            for (std::sregex_iterator match(text.begin(), text.end(), addApp), end; match != end; ++match) {
-                uint32_t app = 0; if (validAppID((*match)[1].str(), app)) next.insert(app);
-            }
-        }
-    }
-    std::lock_guard lock(g_configMutex);
-    if (next != g_configuredApps) {
-        g_configuredApps = std::move(next);
-        log("Lua AppID registry reloaded: " + std::to_string(g_configuredApps.size()) + " app(s)");
-    }
-}
-
-bool configured(uint32_t appID) {
-    std::lock_guard lock(g_configMutex);
-    return g_configuredApps.contains(appID);
+    if (!home) { log("HOME is unavailable; Lua configuration disabled"); return false; }
+    const auto report = g_configuration.reload(std::filesystem::path(home) / "Library/Application Support/Steam");
+    for (const auto& diagnostic : report.diagnostics) log("Lua configuration: " + diagnostic.file + ": " + diagnostic.message);
+    if (report.reloaded && report.ready) log("Lua configuration executed: " + std::to_string(report.depotCount) + " app/depot(s)");
+    return report.ready;
 }
 
 // Matches the native CheckAppOwnership output layout observed in Steam 1792618285.
@@ -124,7 +90,7 @@ void* g_original = nullptr;
 bool checkAppOwnershipHook(void* object, uint32_t appID, NativeAppOwnership* ownership) {
     const auto original = reinterpret_cast<CheckAppOwnership>(std::atomic_ref<void*>(g_original).load(std::memory_order_acquire));
     const bool result = original ? original(object, appID, ownership) : false;
-    if (!ownership || !configured(appID) || result) return result;
+    if (!ownership || !BST::Mac::HasConfiguredDepot(appID) || result) return result;
     ownership->packageID = 0;
     ownership->releaseState = kReleased;
     ownership->ownsLicense = true;
@@ -149,23 +115,22 @@ bool approvedBuild(const BST::Mac::SteamClientProbe& image) {
 
 void coordinator() {
     for (unsigned attempt = 0; attempt < 240; ++attempt) {
-        reloadLuaAppIDs();
         std::string diagnostic;
         const auto image = BST::Mac::probeSteamClient(diagnostic);
         if (image) {
             if (!approvedBuild(*image)) return;
-            std::atomic_ref<void*>(g_original).store(reinterpret_cast<void*>(image->ownershipEntry), std::memory_order_release);
-            if (!OSTPlatform::Detour::BeginTransaction()) { log(OSTPlatform::Apple::DetourLastError()); return; }
-            const bool staged = OSTPlatform::Detour::Attach(&g_original, reinterpret_cast<void*>(&checkAppOwnershipHook));
-            // Commit also clears a failed staging transaction.
-            const bool committed = OSTPlatform::Detour::CommitTransaction();
-            if (!staged || !committed) {
-                log("CheckAppOwnership hook refused: " + OSTPlatform::Apple::DetourLastError());
-                return;
-            }
-            log("CheckAppOwnership hook installed for Steam build " + std::string(BST::Mac::steamBuild));
+            bool attached = false;
             while (true) {
-                reloadLuaAppIDs();
+                const bool configured = reloadLuaConfiguration();
+                if (configured && !attached) {
+                    std::atomic_ref<void*>(g_original).store(reinterpret_cast<void*>(image->ownershipEntry), std::memory_order_release);
+                    if (!OSTPlatform::Detour::BeginTransaction()) { log(OSTPlatform::Apple::DetourLastError()); return; }
+                    const bool staged = OSTPlatform::Detour::Attach(&g_original, reinterpret_cast<void*>(&checkAppOwnershipHook));
+                    const bool committed = OSTPlatform::Detour::CommitTransaction();
+                    if (!staged || !committed) { log("CheckAppOwnership hook refused: " + OSTPlatform::Apple::DetourLastError()); return; }
+                    attached = true;
+                    log("CheckAppOwnership hook installed for Steam build " + std::string(BST::Mac::steamBuild));
+                }
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
         } else if (diagnostic != "steamclient.dylib is not loaded") { log(diagnostic + "; hooks disabled"); return; }

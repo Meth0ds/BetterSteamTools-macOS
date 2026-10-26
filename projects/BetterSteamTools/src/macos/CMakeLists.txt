@@ -2,6 +2,16 @@ cmake_minimum_required(VERSION 3.20)
 enable_language(OBJCXX)
 enable_language(Swift)
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../OSTPlatform/Apple" "${CMAKE_CURRENT_BINARY_DIR}/platform")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
+include(Tomlplusplus)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LuaCore.cmake")
+add_library(BSTConfiguration STATIC
+    MacLuaSupport.cpp MacConfiguration.cpp
+    ../Utils/Config/LuaConfig.cpp ../Utils/Config/Config.cpp
+    ../Utils/SteamMetadata/StatsClient.cpp ../Utils/SteamMetadata/ManifestClient.cpp
+    ../Utils/Tickets/AppTicketStorage.cpp)
+target_include_directories(BSTConfiguration PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/.." "${CMAKE_CURRENT_BINARY_DIR}/../generated")
+target_link_libraries(BSTConfiguration PUBLIC OSTPlatformMac BSTLua tomlplusplus::tomlplusplus)
 
 set(BST_MANIFEST_KEY_ID "" CACHE STRING "Trusted Ed25519 build-manifest key identifier")
 set(BST_MANIFEST_PUBLIC_KEY_HEX "" CACHE STRING "Trusted Ed25519 public key, 64 lowercase hexadecimal characters")
@@ -35,12 +45,17 @@ set_target_properties(BetterSteamToolsMac PROPERTIES
 target_compile_features(BetterSteamToolsMac PRIVATE cxx_std_20)
 target_include_directories(BetterSteamToolsMac PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(BetterSteamToolsMac PRIVATE "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:BST_MACOS_BUILD=1>")
-target_link_libraries(BetterSteamToolsMac PRIVATE BSTSteamClientProbe BSTBuildApproval "-framework Foundation" "-framework Security")
+target_link_libraries(BetterSteamToolsMac PRIVATE BSTSteamClientProbe BSTBuildApproval BSTConfiguration "-framework Foundation" "-framework Security")
 install(TARGETS BetterSteamToolsMac LIBRARY DESTINATION .)
 
 include(CTest)
 if(BUILD_TESTING)
     enable_language(ASM)
+    add_executable(bst-lua-configuration-selftest tests/LuaConfigurationSelfTest.mm)
+    set_target_properties(bst-lua-configuration-selftest PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
+    target_link_libraries(bst-lua-configuration-selftest PRIVATE BSTConfiguration)
+    add_test(NAME bst-lua-configuration-selftest COMMAND bst-lua-configuration-selftest)
+    set_tests_properties(bst-lua-configuration-selftest PROPERTIES TIMEOUT 30)
     add_executable(bst-platform-selftest tests/PlatformSelfTest.mm)
     set_target_properties(bst-platform-selftest PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
     target_link_libraries(bst-platform-selftest PRIVATE OSTPlatformMac)
