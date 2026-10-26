@@ -58,7 +58,7 @@ actor Recorder {
                 catch is CDPError { }
             }
             let calls = Recorder()
-            let injector = try CDPFallbackInjector(endpoint: root.appendingPathComponent("json")) { method, args in await calls.call(method, args) }
+            let injector = try LuaLoaderCDPInjector(endpoint: root.appendingPathComponent("json")) { method, args in await calls.call(method, args) }
             let frontend = "window.__fixtureFrontend = true; window.__LuaToolsInjected = true;"
             let initial = try await injector.synchronize(frontend: frontend)
             try check(initial.cdpTabs == 1 && initial.errors.isEmpty, "discover only validated store targets and sockets")
@@ -76,7 +76,10 @@ actor Recorder {
             try check(navigatedCount == 2, "new context/nonce can invoke RPC after navigation")
             _ = try await json(root, "control/native")
             let native = try await injector.synchronize(frontend: frontend)
-            try check(native.millenniumTabs == 1 && native.cdpTabs == 0, "Millennium capability handshake takes precedence")
+            try check(native.cdpTabs == 1 && native.errors.isEmpty, "LuaLoader remains the primary route when a legacy backend appears")
+            _ = try await json(root, "control/legacy-handshake")
+            let legacy = try await injector.synchronize(frontend: frontend)
+            try check(legacy.cdpTabs == 0 && legacy.errors.count == 1, "unexpected legacy-loader handshake is rejected")
             _ = try await json(root, "control/broken")
             let failed = try await injector.synchronize(frontend: frontend)
             try check(failed.cdpTabs == 0 && failed.errors.count == 1, "frontend acknowledgement is required")
@@ -87,7 +90,7 @@ actor Recorder {
             let dispatcher = PluginRPCDispatcher()
             try await rejects("unknown RPC must fail") { _ = try await dispatcher.call(method: "Unknown", args: .object([:])) }
             try await rejects("AppID traversal must fail") { _ = try await dispatcher.call(method: "DeleteLuaToolsForApp", args: .object(["appid": .string("../../file")])) }
-            print("PASS: real WebSocket CDP correlation, notifications, cancellation, timeout, disconnect, origin/context isolation, navigation, Millennium handshake and reconnect")
+            print("PASS: real WebSocket CDP correlation, notifications, cancellation, timeout, disconnect, origin/context isolation, navigation, LuaLoader selection and reconnect")
         } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
     }
 }

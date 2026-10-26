@@ -53,15 +53,26 @@ function realm(origin = 'https://store.steampowered.com', millennium) {
     const native = { callServerMethod(plugin, method, args) {
         assert.equal(this, native);
         nativeCalls.push({ plugin, method, args });
-        if (plugin === 'luatools' && method === 'GetCapabilities') return Promise.resolve(JSON.stringify({ service: 'luatools', apiVersion: 1, transport: 'millennium' }));
-        return Promise.resolve('native');
+        if (plugin === 'luatools') return Promise.resolve(JSON.stringify({ service: 'luatools', apiVersion: 1, transport: 'millennium' }));
+        return Promise.resolve('native:' + method);
     } };
     const nativeFn = native.callServerMethod;
     const millennium = realm(undefined, native);
     try {
-        assert.equal((await millennium.run()).transport, 'millennium');
-        assert.equal(native.callServerMethod, nativeFn, 'a live native backend is never wrapped');
-        assert.equal(millennium.context.__LuaToolsMacTransport, undefined);
+        const handshake = await millennium.run();
+        assert.equal(handshake.transport, 'cdp');
+        assert.equal(handshake.loader, 'lualoader-macos');
+        assert.equal(nativeCalls.length, 0, 'LuaLoader does not probe or delegate LuaTools RPC to Millennium');
+        const pending = native.callServerMethod('luatools', 'GetThemes', {});
+        assert.equal(millennium.calls.length, 1);
+        millennium.context.__LuaToolsMacTransport.receive({ nonce: handshake.nonce, id: 1, result: 'LuaLoader reply' });
+        assert.equal(await pending, 'LuaLoader reply');
+        assert.equal(nativeCalls.length, 0);
+        const args = { setting: 'example' };
+        assert.equal(await native.callServerMethod('another-plugin', 'ReadSettings', args), 'native:ReadSettings');
+        assert.equal(nativeCalls[0].args, args, 'unrelated plugin arguments and receiver survive');
+        millennium.context.__LuaToolsMacTransport.dispose('Test done');
+        assert.equal(native.callServerMethod, nativeFn, 'disposal restores exact original API');
     } finally { millennium.close(); }
 
     let backendAvailable = false;
@@ -76,14 +87,19 @@ function realm(origin = 'https://store.steampowered.com', millennium) {
     const original = otherPlugin.callServerMethod;
     const coexist = realm(undefined, otherPlugin);
     try {
-        assert.equal((await coexist.run()).transport, 'cdp');
+        const initial = await coexist.run();
+        assert.equal(initial.transport, 'cdp');
         assert.equal(await otherPlugin.callServerMethod('some-other-plugin', 'ReadSettings', {}), 'other:ReadSettings');
         const pending = otherPlugin.callServerMethod('luatools', 'GetThemes', {});
-        const rejection = assert.rejects(pending, /Millennium backend available/);
+        const wrapper = otherPlugin.callServerMethod;
         backendAvailable = true;
-        assert.equal((await coexist.run()).transport, 'millennium');
-        await rejection;
-        assert.equal(otherPlugin.callServerMethod, original, 'late native activation restores exact original function');
+        const repeated = await coexist.run();
+        assert.equal(repeated.nonce, initial.nonce, 'late Millennium activation does not replace LuaLoader');
+        assert.equal(otherPlugin.callServerMethod, wrapper, 'one LuaTools wrapper remains installed');
+        coexist.context.__LuaToolsMacTransport.receive({ nonce: initial.nonce, id: 1, result: 'pending survives' });
+        assert.equal(await pending, 'pending survives');
+        coexist.context.__LuaToolsMacTransport.dispose('Test done');
+        assert.equal(otherPlugin.callServerMethod, original);
     } finally { coexist.close(); }
-    console.log('PASS: bridge RPC correlation, nonce isolation, errors, disposal, Millennium preference and coexistence');
+    console.log('PASS: LuaLoader priority, RPC correlation, nonce isolation, errors, disposal and Millennium coexistence');
 })().catch(error => { console.error(error); process.exitCode = 1; });

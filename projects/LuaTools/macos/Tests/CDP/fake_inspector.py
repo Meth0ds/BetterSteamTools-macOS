@@ -102,7 +102,7 @@ class Fixture:
                 result = {"exceptionDetails": {"text": "fixture JavaScript exception"}, "result": {"type": "undefined"}}
             elif "Native CDP transport only" in expression:
                 self.stats["handshakes"] += 1
-                value = {"transport": "millennium", "version": 1} if self.mode == "native" else {"transport": "cdp", "version": 1, "nonce": self.nonce}
+                value = {"transport": "millennium", "version": 2} if self.mode == "legacy-handshake" else {"transport": "cdp", "loader": "lualoader-macos", "version": 2, "nonce": self.nonce}
                 result = {"result": {"value": value}}
             elif expression.startswith("Boolean(window.__LuaToolsMacTransport?.receive("):
                 payload = json.loads(expression[len("Boolean(window.__LuaToolsMacTransport?.receive("):-2])

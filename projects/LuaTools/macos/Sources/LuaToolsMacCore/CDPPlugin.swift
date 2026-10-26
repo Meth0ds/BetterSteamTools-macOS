@@ -7,14 +7,14 @@ private final class InspectorHTTPPolicy: NSObject, URLSessionTaskDelegate, Senda
     }
 }
 
-/// The same method/path contract used by the Millennium Lua backend. Unsupported actions
+/// LuaLoader desktop RPC contract, also understood by the legacy Lua adapter. Unsupported actions
 /// retain the API's explicit error response; this bridge never manufactures successful RPCs.
 public struct PluginRPCDispatcher: Sendable {
     public let router: LocalAPIRouter
     public init(router: LocalAPIRouter = LocalAPIRouter()) { self.router = router }
     public func call(method: String, args: BridgeJSON) async throws -> BridgeJSON {
         if method == "GetCapabilities" {
-            return .string(try BridgeJSON.object(["service": .string("luatools"), "apiVersion": .number(1), "transport": .string("cdp")]).encoded())
+            return .string(try BridgeJSON.object(["service": .string("luatools"), "apiVersion": .number(1), "transport": .string("cdp"), "loader": .string("lualoader-macos")]).encoded())
         }
         let appRoutes = [
             "HasLuaToolsForApp": ("GET", "/has/"), "DeleteLuaToolsForApp": ("POST", "/remove/"),
@@ -76,7 +76,8 @@ public actor CDPPluginSession {
         guard let bridgeURL = Bundle.module.url(forResource: "CDPBridge", withExtension: "js") else { throw LuaToolsError.invalidRequest }
         let bridge = try String(contentsOf: bridgeURL, encoding: .utf8)
         let handshake = try await connection.evaluate(bridge)
-        guard let transport = handshake["transport"]?.string, ["millennium", "cdp", "excluded"].contains(transport) else { throw CDPError.protocolError("invalid plugin handshake") }
+        guard let transport = handshake["transport"]?.string, ["cdp", "excluded"].contains(transport) else { throw CDPError.protocolError("invalid plugin handshake") }
+        if transport == "cdp", handshake["loader"]?.string != "lualoader-macos" { throw CDPError.protocolError("unexpected plugin loader") }
         let nextNonce = handshake["nonce"]?.string
         if nonce != nextNonce { lastCallID = 0 }
         nonce = nextNonce
@@ -129,13 +130,12 @@ public actor CDPPluginSession {
 
 public struct CDPPluginStatus: Sendable, Equatable {
     public let cdpTabs: Int
-    public let millenniumTabs: Int
     public let errors: [String]
 }
 
 /// Refreshes the CURRENT document, rather than treating a tab ID as proof of injection.
 /// Missing inspector sockets are retried; changed/closed targets are disposed before reuse.
-public actor CDPFallbackInjector {
+public actor LuaLoaderCDPInjector {
     private struct Tab: Decodable { let id: String; let type: String?; let url: String; let webSocketDebuggerUrl: String? }
     private struct Target { let url: URL; let session: CDPPluginSession }
     private let endpoint: URL
@@ -182,7 +182,7 @@ public actor CDPFallbackInjector {
         for id in Array(targets.keys) where targets[id]?.url != active[id] {
             if let old = targets.removeValue(forKey: id) { await old.session.close() }
         }
-        var cdp = 0, millennium = 0, errors: [String] = []
+        var cdp = 0, errors: [String] = []
         for (id, url) in active.sorted(by: { $0.key < $1.key }) {
             try Task.checkCancellation()
             guard generation == epoch, !stopped else { throw CDPError.closed }
@@ -195,7 +195,6 @@ public actor CDPFallbackInjector {
                 guard generation == epoch, !stopped else { await target.session.close(); throw CDPError.closed }
                 switch transport {
                 case "cdp": cdp += 1
-                case "millennium": millennium += 1
                 default: break
                 }
             } catch {
@@ -203,7 +202,7 @@ public actor CDPFallbackInjector {
                 if let failed = targets.removeValue(forKey: id) { await failed.session.close() }
             }
         }
-        return CDPPluginStatus(cdpTabs: cdp, millenniumTabs: millennium, errors: errors)
+        return CDPPluginStatus(cdpTabs: cdp, errors: errors)
     }
     public func start(frontend: String, report: @escaping @Sendable (CDPPluginStatus) async -> Void) {
         guard worker == nil, !stopped else { return }
@@ -211,7 +210,7 @@ public actor CDPFallbackInjector {
             while !Task.isCancelled {
                 guard let self else { return }
                 do { await report(try await self.synchronize(frontend: frontend)) }
-                catch { await report(CDPPluginStatus(cdpTabs: 0, millenniumTabs: 0, errors: [error.localizedDescription])); await self.discardTargets() }
+                catch { await report(CDPPluginStatus(cdpTabs: 0, errors: [error.localizedDescription])); await self.discardTargets() }
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }

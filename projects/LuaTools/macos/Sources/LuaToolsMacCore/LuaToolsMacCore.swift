@@ -267,13 +267,8 @@ public struct PluginInstaller: Sendable {
     public let destination: URL
     public init(destination: URL? = nil) {
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        let env = ProcessInfo.processInfo.environment["MILLENNIUM_PLUGIN_DIR"].map { URL(fileURLWithPath: $0) }
-        let candidates = [env,
-            home.appendingPathComponent("Library/Application Support/millennium/plugins/luatools", isDirectory: true),
-            home.appendingPathComponent("Library/Application Support/Millennium/plugins/luatools", isDirectory: true),
-            home.appendingPathComponent("Library/Application Support/LuaToolsMac/plugin", isDirectory: true)
-        ].compactMap { $0 }
-        self.destination = destination ?? candidates.first(where: { FileManager.default.fileExists(atPath: $0.deletingLastPathComponent().path) }) ?? candidates.last!
+        let override = ProcessInfo.processInfo.environment["LUA_TOOLS_PLUGIN_DIR"].map { URL(fileURLWithPath: $0) }
+        self.destination = destination ?? override ?? home.appendingPathComponent("Library/Application Support/LuaToolsMac/plugin", isDirectory: true)
     }
     public func install(zip: URL, expectedSHA256: String? = nil) throws {
         if let expectedSHA256, sha256(url: zip) != expectedSHA256.lowercased() { throw LuaToolsError.invalidRequest }

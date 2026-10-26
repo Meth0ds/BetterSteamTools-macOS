@@ -1,5 +1,5 @@
 # LuaTools macOS plugin
 
-Esta variante conserva el frontend `luatools.js` y el contrato RPC de LTSP, pero adapta el arranque del backend y las rutas Steam a macOS. Millennium se usa cuando expone su API; el cliente LuaTools mantiene CDP como fallback.
+El cargador objetivo es **LuaLoader**, siguiendo el cliente Windows actual. La app macOS compone el frontend `luatools.js` y sus estilos, y atiende su contrato RPC mediante el transporte CDP. Conserva `window.Millennium.callServerMethod` como API compatible para el frontend y mantiene las llamadas de otros plugins; Millennium no es una dependencia principal.
 
-El backend espera LuaTools en `~/Applications/LuaTools.app` o `/Applications/LuaTools.app` y usa el servidor local `http://127.0.0.1:6767`.
+El backend Lua de esta carpeta se conserva como adaptador heredado. El arranque nativo de LuaLoader y la activación en Steam siguen pendientes de implementación y aceptación. La app usa el servicio local `http://127.0.0.1:6767`.

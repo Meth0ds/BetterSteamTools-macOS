@@ -2,30 +2,19 @@
 (async function () {
     "use strict";
     if (location.origin !== "https://store.steampowered.com") return { transport: "excluded" };
-    const version = 1;
+    const version = 2;
+    const loader = "lualoader-macos";
     const old = window.__LuaToolsMacTransport;
     const millennium = window.Millennium;
     // Preserve another plugin's receiver and argument contract exactly.
     const nativeCall = old && old.owner === millennium && millennium.callServerMethod === old.wrapper
         ? old.nativeCall : millennium && typeof millennium.callServerMethod === "function"
             ? millennium.callServerMethod.bind(millennium) : null;
-    let timer;
-    try {
-        if (nativeCall) {
-            const capability = await Promise.race([
-                Promise.resolve(nativeCall("luatools", "GetCapabilities", {})),
-                new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Millennium handshake timed out")), 750); })
-            ]);
-            const result = typeof capability === "string" ? JSON.parse(capability) : capability;
-            if (result && result.service === "luatools" && result.apiVersion === 1 && result.transport === "millennium") {
-                if (old) old.dispose("Millennium backend available");
-                return { transport: "millennium", version };
-            }
-        }
-    } catch (_) { /* Missing LuaTools backend: the desktop bridge remains usable. */ }
-    finally { clearTimeout(timer); }
+    // LuaLoader owns LuaTools RPC, even when Millennium is installed. The
+    // Millennium name is the existing frontend API; unrelated plugins retain
+    // their original receiver and call contract through nativeCall.
     if (old && old.version === version && old.owner === window.Millennium && old.wrapper === window.Millennium.callServerMethod)
-        return { transport: "cdp", version, nonce: old.nonce };
+        return { transport: "cdp", loader, version, nonce: old.nonce };
     if (old) old.dispose("Transport replaced");
     if (typeof window.__LuaToolsMacRPC !== "function") throw new Error("Native CDP binding missing");
     const pending = new Map();
@@ -74,5 +63,5 @@
     owner.callServerMethod = state.wrapper;
     window.Millennium = owner;
     window.__LuaToolsMacTransport = state;
-    return { transport: "cdp", version, nonce };
+    return { transport: "cdp", loader, version, nonce };
 })()

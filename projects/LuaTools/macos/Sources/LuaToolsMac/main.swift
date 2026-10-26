@@ -19,7 +19,7 @@ struct LuaToolsMacApp: App {
     private let paths = SteamMacPaths.detected
     private let installer = LuaInstaller()
     private var api: LocalAPIServer?
-    private var injector: CDPFallbackInjector?
+    private var injector: LuaLoaderCDPInjector?
     init() {
         do { api = try LocalAPIServer(installer: installer) }
         catch { status = "No se pudo preparar el servidor local: \(error.localizedDescription)" }
@@ -65,7 +65,7 @@ struct LuaToolsMacApp: App {
         do {
             let script = try PluginFrontend(pluginDirectory: PluginInstaller().destination).script
             if let injector { await injector.stop() }
-            let transport = try CDPFallbackInjector()
+            let transport = try LuaLoaderCDPInjector()
             injector = transport
             await transport.start(frontend: script) { [weak self] report in
                 await self?.showPluginStatus(report)
@@ -74,8 +74,8 @@ struct LuaToolsMacApp: App {
     }
     private func showPluginStatus(_ report: CDPPluginStatus) {
         if let error = report.errors.first { pluginStatus = "Esperando al inspector de Steam: \(error)" }
-        else if report.cdpTabs + report.millenniumTabs == 0 { pluginStatus = "Esperando a la tienda de Steam" }
-        else { pluginStatus = "Plugin conectado · Millennium: \(report.millenniumTabs) · CDP: \(report.cdpTabs)" }
+        else if report.cdpTabs == 0 { pluginStatus = "Esperando a la tienda de Steam" }
+        else { pluginStatus = "LuaLoader · Plugin conectado en \(report.cdpTabs) pestaña(s)" }
     }
     func installPlugin() {
         guard let raw = ProcessInfo.processInfo.environment["LUA_TOOLS_MAC_PLUGIN_ZIP"] else { status = "Define LUA_TOOLS_MAC_PLUGIN_ZIP con plugin-macos.zip"; return }
@@ -122,7 +122,7 @@ struct ContentView: View {
         case .operations:
             VStack(alignment: .leading, spacing: 16) { Text("Operaciones").font(.title2.bold()); GroupBox("Servicios") { VStack(alignment: .leading) { Button("Instalar LaunchAgent", action: model.installAgent); Text("API local: 127.0.0.1:6767").foregroundStyle(.secondary) }.padding(8) }; Text(model.pluginStatus).foregroundStyle(.secondary) }
         case .settings:
-            Form { Section("Compatibilidad") { Text("Millennium es el backend principal; CDP en 8080 es el fallback."); Text("NotProton no descarga CrossOver ni modifica licencias.").foregroundStyle(.secondary) } }.formStyle(.grouped)
+            Form { Section("Compatibilidad") { Text("El plugin utiliza LuaLoader y el servicio local de LuaTools."); Text("NotProton no descarga CrossOver ni modifica licencias.").foregroundStyle(.secondary) } }.formStyle(.grouped)
         }
     }
     private func statusCard(_ title: String, _ symbol: String, _ value: String) -> some View { VStack(alignment: .leading) { Label(title, systemImage: symbol).font(.headline); Text(value).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10)) }
