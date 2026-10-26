@@ -58,7 +58,7 @@ actor Recorder {
                 catch is CDPError { }
             }
             let calls = Recorder()
-            let injector = try LuaLoaderCDPInjector(endpoint: root.appendingPathComponent("json")) { method, args in await calls.call(method, args) }
+            let injector = try LuaLoaderCDPInjector(endpoint: root.appendingPathComponent("json"), inspectorAuthorizer: { _ in }) { method, args in await calls.call(method, args) }
             let frontend = "window.__fixtureFrontend = true; window.__LuaToolsInjected = true;"
             let initial = try await injector.synchronize(frontend: frontend)
             try check(initial.cdpTabs == 1 && initial.errors.isEmpty, "discover only validated store targets and sockets")

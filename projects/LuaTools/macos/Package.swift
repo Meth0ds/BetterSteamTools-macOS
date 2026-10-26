@@ -11,7 +11,8 @@ let package = Package(
         .executable(name: "LuaToolsCDPSelfTest", targets: ["LuaToolsCDPSelfTest"]),
     ],
     targets: [
-        .target(name: "LuaToolsMacCore", resources: [.copy("Resources/CDPBridge.js")]),
+        .target(name: "NativeProcessInspection"),
+        .target(name: "LuaToolsMacCore", dependencies: ["NativeProcessInspection"], resources: [.copy("Resources/CDPBridge.js")]),
         .executableTarget(name: "LuaToolsMac", dependencies: ["LuaToolsMacCore"]),
         .executableTarget(name: "LuaToolsMacSelfTest", dependencies: ["LuaToolsMacCore"], path: "Tests/LuaToolsMacSelfTest"),
         .executableTarget(name: "LuaToolsCDPSelfTest", dependencies: ["LuaToolsMacCore"], path: "Tests/LuaToolsCDPSelfTest"),

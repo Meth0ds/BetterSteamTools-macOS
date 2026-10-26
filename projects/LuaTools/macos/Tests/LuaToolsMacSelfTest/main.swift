@@ -123,18 +123,29 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
 
 @main struct SelfTest {
     static func main() async {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--inspect-port", let port = UInt16(CommandLine.arguments[2]) {
+            do {
+                let owners = try NativeSteamInspector.listeners(port: port)
+                for owner in owners { print("pid=\(owner.pid) loopback=\(owner.loopbackOnly) executable=\(owner.executable)") }
+                do { try NativeSteamInspector.authorize(URL(string: "http://127.0.0.1:\(port)/json")!); print("AUTHORIZED: native Steam inspector") }
+                catch { print("REFUSED: \(error.localizedDescription)") }
+                return
+            } catch { fputs("Inspector diagnostic failed: \(error)\n", stderr); exit(1) }
+        }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("luatools-selftest-\(UUID().uuidString)")
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
             try testParser()
             try testPluginAssets(root: root)
+            try testInspectorOwnerPaths(root: root)
             let installer = try testInstallerAndRoutes(root: root)
             try testZipPackage(root: root)
             let server = try LocalAPIServer(installer: installer, port: 0)
             let port = try await server.start()
             defer { server.stop() }
             let response = try await fragmentedTCP(port: port)
+            try testLiveListenerOwnership(port: port)
             try check(String(decoding: response, as: UTF8.self).hasPrefix("HTTP/1.1 200"), "real TCP request succeeds")
             let url = URL(string: "http://127.0.0.1:\(port)/has/42")!
             let (_, rawResponse) = try await URLSession.shared.data(from: url)

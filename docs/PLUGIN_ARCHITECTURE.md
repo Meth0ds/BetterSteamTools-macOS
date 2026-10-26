@@ -12,3 +12,5 @@ Authoritative sources in the imported LuaTools commit:
 The JavaScript API name `Millennium` is retained for frontend compatibility. It must not be treated as proof that Millennium is the loader or made a mandatory dependency.
 
 macOS work still required: implement the native LuaLoader bootstrap/lifecycle and prove store/library behavior in native Steam. The desktop CDP service now owns LuaTools RPC as its primary route, retains unrelated plugins' RPC behavior and keeps one wrapper with stable pending calls when a legacy Millennium backend appears. `winmm.dll` itself cannot load into a Mach-O process. The legacy Lua backend is compatibility material, not the completed primary loader.
+
+The macOS inspector authorizer checks the port's owning processes through libproc. A loopback address and a store tab are insufficient: Windows Steam under CrossOver can expose both. Production discovery requires native Steam helper paths inside the selected installation and refuses conflicting or unknown owners. Test fixtures provide an explicit authorizer for their simulated inspector.

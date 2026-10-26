@@ -139,6 +139,7 @@ public actor LuaLoaderCDPInjector {
     private struct Tab: Decodable { let id: String; let type: String?; let url: String; let webSocketDebuggerUrl: String? }
     private struct Target { let url: URL; let session: CDPPluginSession }
     private let endpoint: URL
+    private let inspectorAuthorizer: @Sendable (URL) throws -> Void
     private let handler: CDPPluginSession.RPCHandler
     private let http: URLSession
     private var targets: [String: Target] = [:]
@@ -146,9 +147,12 @@ public actor LuaLoaderCDPInjector {
     private var syncing = false
     private var generation: UInt64 = 0
     private var stopped = false
-    public init(endpoint: URL = URL(string: "http://127.0.0.1:8080/json")!, handler: CDPPluginSession.RPCHandler? = nil) throws {
+    public init(endpoint: URL = URL(string: "http://127.0.0.1:8080/json")!,
+                inspectorAuthorizer: @escaping @Sendable (URL) throws -> Void = { try NativeSteamInspector.authorize($0) },
+                handler: CDPPluginSession.RPCHandler? = nil) throws {
         guard CDPConnection.isLoopback(endpoint, schemes: ["http"]), endpoint.port != nil, endpoint.query == nil else { throw CDPError.invalidEndpoint }
         self.endpoint = endpoint
+        self.inspectorAuthorizer = inspectorAuthorizer
         self.handler = handler ?? { method, args in try await PluginRPCDispatcher().call(method: method, args: args) }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 3
@@ -161,6 +165,7 @@ public actor LuaLoaderCDPInjector {
         guard !syncing else { throw CDPError.protocolError("discovery already in progress") }
         let epoch = generation
         syncing = true; defer { syncing = false }
+        try inspectorAuthorizer(endpoint)
         let (bytes, response) = try await http.bytes(from: endpoint)
         guard let response = response as? HTTPURLResponse, response.statusCode == 200, response.url == endpoint,
               response.expectedContentLength <= 1_048_576 else { throw CDPError.protocolError("invalid inspector discovery response") }
@@ -171,6 +176,9 @@ public actor LuaLoaderCDPInjector {
         }
         try Task.checkCancellation()
         guard generation == epoch, !stopped else { throw CDPError.closed }
+        // Discovery is asynchronous. Recheck ownership before connecting to
+        // the returned WebSocket targets after the network request completes.
+        try inspectorAuthorizer(endpoint)
         let tabs = try JSONDecoder().decode([Tab].self, from: data)
         guard tabs.count <= 128 else { throw CDPError.protocolError("too many inspector targets") }
         var active: [String: URL] = [:]
