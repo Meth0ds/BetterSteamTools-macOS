@@ -4,8 +4,11 @@ import Foundation
 private final class MemoryCredentials: LuaToolsCredentialStore, @unchecked Sendable {
     private let lock = NSLock(); private var data: Data?
     func read() throws -> Data? { lock.lock(); defer { lock.unlock() }; return data }
-    func write(_ value: Data) throws { lock.lock(); defer { lock.unlock() }; data = value }
-    func remove() throws { lock.lock(); defer { lock.unlock() }; data = nil }
+    func compareExchange(expected: Data?, desired: Data) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard data == expected else { return false }
+        data = desired; return true
+    }
 }
 private actor AuthFixture {
     private(set) var requests: [URLRequest] = []
@@ -61,4 +64,13 @@ func testAuthentication() async throws {
     try await racing.signOut()
     do { _ = try await pending.value; throw TestFailure(description: "refresh returned after sign out") } catch is CancellationError { } catch is LuaToolsAuthenticationError { }
     let afterRace = try await racing.account(); try check(afterRace == nil, "cancelled refresh cannot restore signed-out session")
+    let sharedStore = MemoryCredentials(), sharedFixture = AuthFixture()
+    let firstProcess = LuaToolsAuthentication(store: sharedStore, transport: { try await sharedFixture.send($0) })
+    let secondProcess = LuaToolsAuthentication(store: sharedStore, transport: { try await sharedFixture.send($0) })
+    _ = try await firstProcess.signIn(code: "A1B2C3")
+    let inFlight = Task { try await firstProcess.accessToken() }
+    try await Task.sleep(for: .milliseconds(20))
+    try await secondProcess.signOut()
+    do { _ = try await inFlight.value; throw TestFailure(description: "other process restored signed-out session") } catch is LuaToolsAuthenticationError { }
+    let sharedResult = try await firstProcess.account(); try check(sharedResult == nil, "sign-out in another process prevents refresh resurrection")
 }
