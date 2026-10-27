@@ -1,0 +1,37 @@
+{
+  "format": "analysis-only",
+  "runtimeApproved": false,
+  "steamBuild": "1792618285",
+  "module": "steamclient.dylib",
+  "sha256": "b9d62be2ac64b77dc77e1d19eefcf3880df99495c7db85b30623095310b6a6bd",
+  "architecture": "arm64",
+  "candidates": [
+    {
+      "role": "package cache lookup or creation",
+      "rva": "0x5a365c",
+      "entryBytes": "ff0301d1f65701a9f44f02a9fd7b03a9fdc30091f40302aaf50301aaf30300aa",
+      "evidence": ["CheckAppOwnership calls it at 0xa638d0 with cache, package ID and token in x0/x1/x2", "returns the package pointer in x0", "cache miss allocates 0xa0 bytes and calls constructor 0x5a33c0"]
+    },
+    {
+      "role": "32-bit CUtlMemory growth",
+      "rva": "0x95620",
+      "entryBytes": "f44fbea9fd7b01a9fd430091f40301aaf30300aa3f0000716c01005440a60090",
+      "evidence": ["call 0x5a7b48 receives vector memory at x0 and growth amount in w1", "updates allocation count at +8 and pointer at +0", "caller updates vector size separately at +16"]
+    },
+    {
+      "role": "mark package license changed",
+      "rva": "0xa60ed4",
+      "entryBytes": "ff4301d1f85f01a9f65702a9f44f03a9fd7b04a9fd030191f30300aae10f00b9",
+      "evidence": ["call 0xa65298 passes user, package ID and boolean in x0/w1/w2", "other calls at 0xa65844 and 0xa658f8 pass both boolean values"]
+    },
+    {
+      "role": "candidate pending license update processor",
+      "rva": "0xa6151c",
+      "entryBytes": "ff0302d1fc6f02a9fa6703a9f85f04a9f65705a9f44f06a9fd7b07a9fdc30191",
+      "evidence": ["takes user object in x0 and returns boolean in w0", "walks licenses and package app vectors; calls 0xa61774 and 0xa60fe8 when ready"],
+      "qualification": "role inferred from control flow; not verified by a live invocation"
+    }
+  ],
+  "packageLayout": {"sizeFromAllocation": 160, "packageID": 0, "accessToken": 8, "status": 24, "appVector": 64, "appVectorSize": 80, "depotVector": 88},
+  "validationRequired": ["verify function identities and user/cache lifetime in a real signed-in Steam process", "verify package-zero creation and vector ownership with a real session", "verify notification behavior and concurrent updates", "verify library visibility, removals, NotProton coexistence and game launch"]
+}

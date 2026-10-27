@@ -10,6 +10,7 @@
 static void* original = nullptr;
 static void* binaryOriginal = nullptr;
 static void* manifestOriginal = nullptr;
+static void* packageOriginal = nullptr;
 // Pass-through only. Never fabricate a Steam user object or license output.
 static bool passthrough(void* object, uint32_t app, void* output) {
     using Function = bool (*)(void*, uint32_t, void*);
@@ -27,6 +28,10 @@ static bool manifestPassthrough(void* userAppManager, uint32_t appID, void* user
     const auto function = reinterpret_cast<Function>(std::atomic_ref<void*>(manifestOriginal).load(std::memory_order_acquire));
     return function(userAppManager, appID, userConfig, depotInfo, sharedDepotInfo, steamApp, buildID, betaFallback);
 }
+static void* packagePassthrough(void* cache, uint32_t packageID, uint64_t token) {
+    using Function = void* (*)(void*, uint32_t, uint64_t);
+    return reinterpret_cast<Function>(std::atomic_ref<void*>(packageOriginal).load(std::memory_order_acquire))(cache, packageID, token);
+}
 int main(int argc, char** argv) {
     if (argc != 2) { std::cerr << "usage: bst-real-hook-smoke <steamclient.dylib>\n"; return 2; }
     void* handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
@@ -42,28 +47,33 @@ int main(int argc, char** argv) {
     std::array<uint8_t, 32> manifestBefore{};
     auto* manifestEntry = reinterpret_cast<void*>(image->buildDepotDependencyEntry);
     std::memcpy(manifestBefore.data(), manifestEntry, manifestBefore.size()); manifestOriginal = manifestEntry;
+    std::array<uint8_t, 32> packageBefore{};
+    auto* packageEntry = reinterpret_cast<void*>(image->getPackageInfoEntry);
+    std::memcpy(packageBefore.data(), packageEntry, packageBefore.size()); packageOriginal = packageEntry;
     namespace Detour = OSTPlatform::Detour;
     if (!Detour::BeginTransaction()) { std::cerr << "begin attach failed\n"; return 1; }
     const bool attached = Detour::Attach(&original, reinterpret_cast<void*>(passthrough));
     const bool binaryAttached = Detour::Attach(&binaryOriginal, reinterpret_cast<void*>(binaryPassthrough));
     const bool manifestAttached = Detour::Attach(&manifestOriginal, reinterpret_cast<void*>(manifestPassthrough));
+    const bool packageAttached = Detour::Attach(&packageOriginal, reinterpret_cast<void*>(packagePassthrough));
     const bool committed = Detour::CommitTransaction();
-    if (!attached || !binaryAttached || !manifestAttached || !committed || original == entry || binaryOriginal == binaryEntry || manifestOriginal == manifestEntry ||
-        !std::memcmp(before.data(), entry, 4) || !std::memcmp(binaryBefore.data(), binaryEntry, 4) || !std::memcmp(manifestBefore.data(), manifestEntry, 4)) {
+    if (!attached || !binaryAttached || !manifestAttached || !packageAttached || !committed || original == entry || binaryOriginal == binaryEntry || manifestOriginal == manifestEntry || packageOriginal == packageEntry ||
+        !std::memcmp(before.data(), entry, 4) || !std::memcmp(binaryBefore.data(), binaryEntry, 4) || !std::memcmp(manifestBefore.data(), manifestEntry, 4) || !std::memcmp(packageBefore.data(), packageEntry, 4)) {
         std::cerr << "Real-image detour failed: " << OSTPlatform::Apple::DetourLastError() << '\n'; return 1;
     }
     if (!Detour::BeginTransaction()) { std::cerr << "begin detach failed\n"; return 1; }
     const bool detached = Detour::Detach(&original, reinterpret_cast<void*>(passthrough));
     const bool binaryDetached = Detour::Detach(&binaryOriginal, reinterpret_cast<void*>(binaryPassthrough));
     const bool manifestDetached = Detour::Detach(&manifestOriginal, reinterpret_cast<void*>(manifestPassthrough));
+    const bool packageDetached = Detour::Detach(&packageOriginal, reinterpret_cast<void*>(packagePassthrough));
     const bool restored = Detour::CommitTransaction();
-    if (!detached || !binaryDetached || !manifestDetached || !restored || original != entry || binaryOriginal != binaryEntry || manifestOriginal != manifestEntry ||
-        std::memcmp(before.data(), entry, before.size()) || std::memcmp(binaryBefore.data(), binaryEntry, binaryBefore.size()) || std::memcmp(manifestBefore.data(), manifestEntry, manifestBefore.size())) {
+    if (!detached || !binaryDetached || !manifestDetached || !packageDetached || !restored || original != entry || binaryOriginal != binaryEntry || manifestOriginal != manifestEntry || packageOriginal != packageEntry ||
+        std::memcmp(before.data(), entry, before.size()) || std::memcmp(binaryBefore.data(), binaryEntry, binaryBefore.size()) || std::memcmp(manifestBefore.data(), manifestEntry, manifestBefore.size()) || std::memcmp(packageBefore.data(), packageEntry, packageBefore.size())) {
         std::cerr << "Real-image restoration failed: " << OSTPlatform::Apple::DetourLastError() << '\n'; return 1;
     }
     // Retain the loaded client until process exit; its initializers may have
     // created workers. No Steam process/bundle is changed by this helper.
-    std::cout << "PASS: real ARM64 ownership/ConfigStore/manifest entries verified; three detours attached and all 96 original bytes restored\n"
+    std::cout << "PASS: real ARM64 ownership/ConfigStore/manifest/package entries verified; four detours attached and all 128 original bytes restored\n"
                  "Scope: isolated code patching; Steam user ABI, library UI and game launch are not exercised.\n";
     return 0;
 }

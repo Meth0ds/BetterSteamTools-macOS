@@ -31,7 +31,8 @@ add_library(BSTSteamClientProbe STATIC MachOImageLayout.cpp SteamClientProbe.cpp
 target_include_directories(BSTSteamClientProbe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(BSTSteamClientProbe PUBLIC OSTPlatformMac)
 
-add_library(BetterSteamToolsMac SHARED BetterSteamToolsMac.mm MacHookRuntime.cpp MacManifestHook.cpp)
+option(BST_EXPERIMENTAL_PACKAGE_HOOK "Enable package hooks not yet validated in live Steam" OFF)
+add_library(BetterSteamToolsMac SHARED BetterSteamToolsMac.mm MacHookRuntime.cpp MacManifestHook.cpp MacPackageSync.cpp MacPackageHook.cpp MacOwnership.cpp)
 set_target_properties(BetterSteamToolsMac PROPERTIES
     OUTPUT_NAME "BetterSteamTools"
     PREFIX ""
@@ -45,6 +46,9 @@ set_target_properties(BetterSteamToolsMac PROPERTIES
 target_compile_features(BetterSteamToolsMac PRIVATE cxx_std_20)
 target_include_directories(BetterSteamToolsMac PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/.." "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(BetterSteamToolsMac PRIVATE "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:BST_MACOS_BUILD=1>")
+if(BST_EXPERIMENTAL_PACKAGE_HOOK)
+    target_compile_definitions(BetterSteamToolsMac PRIVATE "$<$<COMPILE_LANGUAGE:CXX,OBJCXX>:BST_EXPERIMENTAL_PACKAGE_HOOK=1>")
+endif()
 target_link_libraries(BetterSteamToolsMac PRIVATE BSTSteamClientProbe BSTBuildApproval BSTConfiguration "-framework Foundation" "-framework Security")
 install(TARGETS BetterSteamToolsMac LIBRARY DESTINATION .)
 
@@ -63,6 +67,14 @@ if(BUILD_TESTING)
     target_include_directories(bst-manifest-hook-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
     target_link_libraries(bst-manifest-hook-selftest PRIVATE BSTConfiguration)
     add_test(NAME bst-manifest-hook-selftest COMMAND bst-manifest-hook-selftest)
+    add_executable(bst-package-sync-selftest tests/PackageSyncSelfTest.cpp MacPackageSync.cpp MacPackageHook.cpp)
+    target_include_directories(bst-package-sync-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_link_libraries(bst-package-sync-selftest PRIVATE BSTConfiguration)
+    add_test(NAME bst-package-sync-selftest COMMAND bst-package-sync-selftest)
+    add_executable(bst-ownership-selftest tests/OwnershipSelfTest.cpp MacOwnership.cpp)
+    target_include_directories(bst-ownership-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_link_libraries(bst-ownership-selftest PRIVATE BSTConfiguration)
+    add_test(NAME bst-ownership-selftest COMMAND bst-ownership-selftest)
     add_executable(bst-platform-selftest tests/PlatformSelfTest.mm)
     set_target_properties(bst-platform-selftest PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
     target_link_libraries(bst-platform-selftest PRIVATE OSTPlatformMac)

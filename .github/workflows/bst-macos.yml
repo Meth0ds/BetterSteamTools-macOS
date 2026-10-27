@@ -52,10 +52,14 @@ jobs:
       - name: Configure
         run: cmake -S src -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build bootstrap dylib
-        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest bst-lua-configuration-selftest bst-configstore-selftest bst-manifest-hook-selftest
+        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest bst-lua-configuration-selftest bst-configstore-selftest bst-manifest-hook-selftest bst-package-sync-selftest bst-ownership-selftest
       - name: Test ARM64 anchor analysis
         run: python3 -m unittest discover -s tools/macos -p "test_*.py"
       - name: Test native platform backend
         run: ctest --test-dir build-macos/macos --output-on-failure
       - name: Test transactional signing and exact signed-bundle restoration
         run: swift run --package-path macos bst-macos-selftest --codesign-dylib "$PWD/build-macos/macos/BetterSteamTools.dylib"
+      - name: Compile experimental package hook
+        run: |
+          cmake -S src -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release -DBST_EXPERIMENTAL_PACKAGE_HOOK=ON
+          cmake --build build-macos --target BetterSteamToolsMac

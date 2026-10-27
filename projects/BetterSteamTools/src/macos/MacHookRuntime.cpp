@@ -2,6 +2,8 @@
 #include "MacConfiguration.h"
 #include "MacConfigStore.h"
 #include "MacManifestHook.h"
+#include "MacPackageHook.h"
+#include "MacOwnership.h"
 #include "SteamClientProbe.h"
 #include "RuntimeManifestVerifier.h"
 #include "BSTManifestTrust.h"
@@ -23,7 +25,6 @@
 #include <array>
 
 namespace {
-constexpr uint32_t kReleased = 4;
 std::once_flag g_start;
 std::ofstream g_log;
 
@@ -51,54 +52,23 @@ bool reloadLuaConfiguration() {
     return report.ready;
 }
 
-// Matches the native CheckAppOwnership output layout observed in Steam 1792618285.
-// The static assertions prevent accidental use of a Windows packing convention.
-struct NativeAppOwnership {
-    uint32_t packageID;
-    uint32_t releaseState;
-    uint32_t steamID32;
-    uint32_t masterSubscriptionAppID;
-    uint32_t trialSeconds;
-    uint32_t existInPackageNums;
-    char purchaseCountryCode[4];
-    uint32_t timeStamp;
-    uint32_t timeExpire;
-    bool ownsLicense;
-    bool licenseExpired;
-    bool permanent;
-    bool lowViolence;
-    bool freeLicense;
-    bool regionRestricted;
-    bool freeWeekend;
-    bool licenseLocked;
-    bool licensePending;
-    bool retailLicense;
-    bool autoGrant;
-    bool licensePermanent;
-    bool guestPass;
-    bool borrowed;
-    bool anySiteLicense;
-    bool allSiteLicenses;
-    bool allActivationRequired;
-    bool familyShared;
-};
-static_assert(offsetof(NativeAppOwnership, ownsLicense) == 36);
-static_assert(offsetof(NativeAppOwnership, freeLicense) == 40);
-static_assert(offsetof(NativeAppOwnership, familyShared) == 53);
-
-using CheckAppOwnership = bool (*)(void*, uint32_t, NativeAppOwnership*);
+using CheckAppOwnership = bool (*)(void*, uint32_t, BST::Mac::NativeAppOwnership*);
 void* g_original = nullptr;
 
-bool checkAppOwnershipHook(void* object, uint32_t appID, NativeAppOwnership* ownership) {
+bool checkAppOwnershipHook(void* object, uint32_t appID, BST::Mac::NativeAppOwnership* ownership) {
     const auto original = reinterpret_cast<CheckAppOwnership>(std::atomic_ref<void*>(g_original).load(std::memory_order_acquire));
     const bool result = original ? original(object, appID, ownership) : false;
-    if (!ownership || !BST::Mac::HasConfiguredDepot(appID) || result) return result;
-    ownership->packageID = 0;
-    ownership->releaseState = kReleased;
-    ownership->ownsLicense = true;
-    // Steam hides a free license from the library; LuaTools entries must remain visible.
-    ownership->freeLicense = false;
-    return true;
+#if BST_EXPERIMENTAL_PACKAGE_HOOK
+    BST::Mac::ReconcilePackageForUser(object);
+#endif
+    const auto snapshot = BST::Mac::GetConfigurationSnapshot();
+    const auto decision = BST::Mac::ApplyOwnership(snapshot.get(), appID, result, ownership);
+    if (decision.genuinelyOwned) {
+        // Do not make a Steam thread wait for a Lua script performing network I/O.
+        std::unique_lock lock(BST::Mac::ConfigurationMutex(), std::try_to_lock);
+        if (lock.owns_lock()) { try { LuaConfig::MarkOwned(appID); } catch (...) { log("Failed to record genuinely owned app"); } }
+    }
+    return decision.result;
 }
 
 bool approvedBuild(const BST::Mac::SteamClientProbe& image) {
@@ -128,17 +98,29 @@ void coordinator() {
                     std::atomic_ref<void*>(g_original).store(reinterpret_cast<void*>(image->ownershipEntry), std::memory_order_release);
                     std::atomic_ref<void*>(*BST::Mac::ConfigStoreOriginalSlot()).store(reinterpret_cast<void*>(image->configStoreGetBinaryEntry), std::memory_order_release);
                     std::atomic_ref<void*>(*BST::Mac::BuildDepotDependencyOriginalSlot()).store(reinterpret_cast<void*>(image->buildDepotDependencyEntry), std::memory_order_release);
+#if BST_EXPERIMENTAL_PACKAGE_HOOK
+                    std::atomic_ref<void*>(*BST::Mac::PackageGetOriginalSlot()).store(reinterpret_cast<void*>(image->getPackageInfoEntry), std::memory_order_release);
+                    BST::Mac::ConfigurePackageFunctions(image->vectorGrowEntry, image->markLicenseChangedEntry, image->processLicenseUpdatesEntry);
+#endif
                     if (!OSTPlatform::Detour::BeginTransaction()) { log(OSTPlatform::Apple::DetourLastError()); return; }
                     const bool staged = OSTPlatform::Detour::Attach(&g_original, reinterpret_cast<void*>(&checkAppOwnershipHook));
                     const bool depotStaged = OSTPlatform::Detour::Attach(BST::Mac::ConfigStoreOriginalSlot(), BST::Mac::ConfigStoreReplacement());
                     const bool manifestStaged = OSTPlatform::Detour::Attach(BST::Mac::BuildDepotDependencyOriginalSlot(), BST::Mac::BuildDepotDependencyReplacement());
+#if BST_EXPERIMENTAL_PACKAGE_HOOK
+                    const bool packageStaged = OSTPlatform::Detour::Attach(BST::Mac::PackageGetOriginalSlot(), BST::Mac::PackageGetReplacement());
+#else
+                    constexpr bool packageStaged = true;
+#endif
                     const bool committed = OSTPlatform::Detour::CommitTransaction();
-                    if (!staged || !depotStaged || !manifestStaged || !committed) {
+                    if (!staged || !depotStaged || !manifestStaged || !packageStaged || !committed) {
                         BST::Mac::DisableConfiguration();
                         log("Ownership/depot hook batch refused: " + OSTPlatform::Apple::DetourLastError()); return;
                     }
                     attached = true;
-                    log("CheckAppOwnership, ConfigStore GetBinary and BuildDepotDependency hooks installed for Steam build " + std::string(BST::Mac::steamBuild));
+                    log("Ownership, ConfigStore and depot manifest hooks installed for Steam build " + std::string(BST::Mac::steamBuild));
+#if BST_EXPERIMENTAL_PACKAGE_HOOK
+                    log("Experimental package hook enabled; live Steam ABI remains unverified");
+#endif
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }

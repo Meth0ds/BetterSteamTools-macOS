@@ -12,6 +12,10 @@ struct SteamClientProbe {
     uintptr_t ownershipEntry = 0;
     uintptr_t configStoreGetBinaryEntry = 0;
     uintptr_t buildDepotDependencyEntry = 0;
+    uintptr_t getPackageInfoEntry = 0;
+    uintptr_t vectorGrowEntry = 0;
+    uintptr_t markLicenseChangedEntry = 0;
+    uintptr_t processLicenseUpdatesEntry = 0;
     std::shared_ptr<void> module;
 };
 // Pins the loaded image for the returned probe's lifetime. Validates on-disk

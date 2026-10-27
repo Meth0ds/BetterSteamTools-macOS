@@ -14,6 +14,11 @@ std::optional<SteamClientProbe> probeSteamClient(std::string& diagnostic) {
     constexpr uint64_t ownershipRVA = 0xa63738;
     constexpr uint64_t configStoreGetBinaryRVA = 0x6b8210;
     constexpr uint64_t buildDepotDependencyRVA = 0x5b0a98;
+    constexpr uint64_t getPackageInfoRVA = 0x5a365c, vectorGrowRVA = 0x95620, markLicenseChangedRVA = 0xa60ed4, processLicenseUpdatesRVA = 0xa6151c;
+    constexpr std::array<uint8_t, 32> packageEntryBytes = {0xff,0x03,0x01,0xd1,0xf6,0x57,0x01,0xa9,0xf4,0x4f,0x02,0xa9,0xfd,0x7b,0x03,0xa9,0xfd,0xc3,0x00,0x91,0xf4,0x03,0x02,0xaa,0xf5,0x03,0x01,0xaa,0xf3,0x03,0x00,0xaa};
+    constexpr std::array<uint8_t, 32> growEntryBytes = {0xf4,0x4f,0xbe,0xa9,0xfd,0x7b,0x01,0xa9,0xfd,0x43,0x00,0x91,0xf4,0x03,0x01,0xaa,0xf3,0x03,0x00,0xaa,0x3f,0x00,0x00,0x71,0x6c,0x01,0x00,0x54,0x40,0xa6,0x00,0x90};
+    constexpr std::array<uint8_t, 32> markEntryBytes = {0xff,0x43,0x01,0xd1,0xf8,0x5f,0x01,0xa9,0xf6,0x57,0x02,0xa9,0xf4,0x4f,0x03,0xa9,0xfd,0x7b,0x04,0xa9,0xfd,0x03,0x01,0x91,0xf3,0x03,0x00,0xaa,0xe1,0x0f,0x00,0xb9};
+    constexpr std::array<uint8_t, 32> processEntryBytes = {0xff,0x03,0x02,0xd1,0xfc,0x6f,0x02,0xa9,0xfa,0x67,0x03,0xa9,0xf8,0x5f,0x04,0xa9,0xf6,0x57,0x05,0xa9,0xf4,0x4f,0x06,0xa9,0xfd,0x7b,0x07,0xa9,0xfd,0xc3,0x01,0x91};
     constexpr std::array<uint8_t, 32> buildDepotDependencyEntryBytes = {
         0xfc, 0x6f, 0xba, 0xa9, 0xfa, 0x67, 0x01, 0xa9, 0xf8, 0x5f, 0x02, 0xa9, 0xf6, 0x57, 0x03, 0xa9,
         0xf4, 0x4f, 0x04, 0xa9, 0xfd, 0x7b, 0x05, 0xa9, 0xfd, 0x43, 0x01, 0x91, 0xff, 0xc3, 0x08, 0xd1
@@ -62,8 +67,18 @@ std::optional<SteamClientProbe> probeSteamClient(std::string& diagnostic) {
             std::memcmp(reinterpret_cast<void*>(*manifestAddress), buildDepotDependencyEntryBytes.data(), buildDepotDependencyEntryBytes.size())) {
             diagnostic = "BuildDepotDependency RVA or entry differs from reviewed ARM64 code"; return std::nullopt;
         }
+        const auto reviewed = [&](uint64_t rva, const std::array<uint8_t, 32>& bytes) -> std::optional<uintptr_t> {
+            const auto candidate = layout->codeAddress(_dyld_get_image_vmaddr_slide(index), rva, bytes.size());
+            if (!candidate || !OSTPlatform::Apple::IsExecutable(reinterpret_cast<void*>(*candidate)) ||
+                !OSTPlatform::Memory::IsReadable(reinterpret_cast<void*>(*candidate), bytes.size()) ||
+                std::memcmp(reinterpret_cast<void*>(*candidate), bytes.data(), bytes.size())) return std::nullopt;
+            return candidate;
+        };
+        const auto package = reviewed(getPackageInfoRVA, packageEntryBytes), growth = reviewed(vectorGrowRVA, growEntryBytes),
+                   mark = reviewed(markLicenseChangedRVA, markEntryBytes), process = reviewed(processLicenseUpdatesRVA, processEntryBytes);
+        if (!package || !growth || !mark || !process) { diagnostic = "Package/license function RVA or entry differs from reviewed ARM64 code"; return std::nullopt; }
         diagnostic = "Reviewed SHA-256, segment-relative RVAs and 32 entry bytes match";
-        return SteamClientProbe{path, *address, *configAddress, *manifestAddress, std::move(module)};
+        return SteamClientProbe{path, *address, *configAddress, *manifestAddress, *package, *growth, *mark, *process, std::move(module)};
     }
     return std::nullopt;
 }
