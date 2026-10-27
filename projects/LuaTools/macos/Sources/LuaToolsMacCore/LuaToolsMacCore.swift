@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import CryptoKit
+import Darwin
 
 public struct SteamMacPaths: Sendable {
     public let steamApp: URL
@@ -123,6 +124,26 @@ public final class LuaInstaller: @unchecked Sendable {
         try PackageTransaction(paths: paths).apply(writes)
         return LuaInstallResult(appID: appID, luaURL: luaDestination, manifests: manifests.count)
     }
+    /// Install standalone Steam depot manifests with the same identity checks
+    /// and journal used for manifests received in a Lua package.
+    public func installManifests(sources: [URL]) throws -> [DepotManifest] {
+        lock.lock(); defer { lock.unlock() }
+        guard !sources.isEmpty, sources.count <= 4096 else { throw LuaToolsError.invalidRequest }
+        var names = Set<String>(), manifests: [DepotManifest] = []
+        var total = 0
+        for source in sources {
+            let data = try boundedData(source, maximum: 64 * 1024 * 1024)
+            total += data.count
+            guard total <= 256 * 1024 * 1024 else { throw LuaToolsError.archiveTooLarge }
+            let manifest = try DepotManifest(fileName: source.lastPathComponent, bytes: data)
+            guard names.insert(manifest.fileName).inserted else { throw LuaToolsError.archiveConflict }
+            manifests.append(manifest)
+        }
+        try FileManager.default.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: paths.depotCache, withIntermediateDirectories: true)
+        try PackageTransaction(paths: paths).apply(manifests.map { .init(relativePath: "depotcache/\($0.fileName)", data: $0.bytes) })
+        return manifests
+    }
     public func recoverPendingTransactions() throws {
         lock.lock(); defer { lock.unlock() }
         guard FileManager.default.fileExists(atPath: paths.userData.appendingPathComponent("config").path) else { return }
@@ -146,8 +167,12 @@ public final class LuaInstaller: @unchecked Sendable {
         return values.isRegularFile == true && values.isSymbolicLink != true
     }
     private func boundedData(_ url: URL, maximum: Int) throws -> Data {
-        guard try regularFile(url) else { throw LuaToolsError.unsafeArchive }
-        let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { throw LuaToolsError.unsafeArchive }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size >= 0, info.st_size <= maximum else { throw LuaToolsError.unsafeArchive }
+        let file = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
         let data = try file.read(upToCount: maximum + 1) ?? Data()
         guard data.count <= maximum else { throw LuaToolsError.archiveTooLarge }
         return data

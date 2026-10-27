@@ -16,12 +16,17 @@ struct LuaToolsMacApp: App {
     @Published var appID = ""
     @Published var pluginStatus = "Plugin pendiente de instalación"
     @Published var installedGames: [InstalledLua] = []
+    @Published var discordCode = ""
+    @Published var accountName = "Invitado"
+    @Published var signingIn = false
     @Published var selected: LuaToolsSection = .overview
     private let paths = SteamMacPaths.detected
     private let installer = LuaInstaller()
+    private let authentication = LuaToolsAuthentication()
     private var service: LuaToolsBackgroundService?
     init() {
         refresh()
+        Task { await refreshAccount() }
         Task { await startLocalService() }
     }
     private func startLocalService() async {
@@ -63,6 +68,12 @@ struct LuaToolsMacApp: App {
         guard panel.runModal() == .OK, let source = panel.url else { return }
         do { let result = try installer.installZip(appID: id, zip: source); refresh(); status = "Paquete instalado: \(result.manifests) manifest(s)" }
         catch { status = "No se pudo instalar el paquete: \(error.localizedDescription)" }
+    }
+    func installManifests() {
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "manifest") ?? .data]; panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        do { let results = try installer.installManifests(sources: panel.urls); status = "Instalados \(results.count) manifests en depotcache" }
+        catch { status = "No se pudieron instalar los manifests: \(error.localizedDescription)" }
     }
     func activateBST() {
         guard let raw = ProcessInfo.processInfo.environment["BETTERSTEAMTOOLS_MAC_DYLIB"],
@@ -119,6 +130,21 @@ struct LuaToolsMacApp: App {
         do { try PluginInstaller().uninstall(); status = "Plugin desactivado; recarga la tienda de Steam para retirar la versión visible"; Task { await connectPlugin() } }
         catch { status = "No se pudo desactivar el plugin: \(error.localizedDescription)" }
     }
+    private func refreshAccount() async {
+        do { let account = try await authentication.account(); accountName = account?.displayName ?? account?.email ?? "Invitado" }
+        catch { status = "No se pudo consultar la cuenta: \(error.localizedDescription)" }
+    }
+    func signIn() {
+        let code = discordCode; signingIn = true
+        Task {
+            defer { signingIn = false }
+            do { let account = try await authentication.signIn(code: code); discordCode = ""; accountName = account.displayName ?? account.email ?? "Sesión iniciada"; status = "Sesión iniciada en LuaTools" }
+            catch { status = "No se pudo iniciar sesión: \(error.localizedDescription)" }
+        }
+    }
+    func signOut() {
+        Task { do { try await authentication.signOut(); accountName = "Invitado"; status = "Sesión cerrada" } catch { status = "No se pudo cerrar sesión: \(error.localizedDescription)" } }
+    }
 }
 
 enum LuaToolsSection: String, CaseIterable, Identifiable {
@@ -166,11 +192,18 @@ struct ContentView: View {
                 }
             }
         case .lua:
-            VStack(alignment: .leading, spacing: 16) { Text("Lua y depots").font(.title2.bold()); Text("Los Lua se guardan en stplug-in y los manifests binarios en depotcache, sin cambiar el formato de Windows.").foregroundStyle(.secondary); HStack { TextField("AppID", text: $model.appID).textFieldStyle(.roundedBorder).frame(width: 170); Button("Comprobar", action: model.installLua); Button("Instalar Lua", action: model.installLuaFromPanel); Button("Instalar ZIP", action: model.installPackage) }; GroupBox("Rutas") { VStack(alignment: .leading) { Text(SteamMacPaths.detected.stPlugin.path); Text(SteamMacPaths.detected.depotCache.path) }.font(.caption.monospaced()).padding(8) } }
+            VStack(alignment: .leading, spacing: 16) { Text("Lua y depots").font(.title2.bold()); Text("Los Lua se guardan en stplug-in y los manifests binarios en depotcache, sin cambiar el formato de Windows.").foregroundStyle(.secondary); HStack { TextField("AppID", text: $model.appID).textFieldStyle(.roundedBorder).frame(width: 170); Button("Comprobar", action: model.installLua); Button("Instalar Lua", action: model.installLuaFromPanel); Button("Instalar ZIP", action: model.installPackage); Button("Instalar manifests", action: model.installManifests) }; GroupBox("Rutas") { VStack(alignment: .leading) { Text(SteamMacPaths.detected.stPlugin.path); Text(SteamMacPaths.detected.depotCache.path) }.font(.caption.monospaced()).padding(8) } }
         case .operations:
             VStack(alignment: .leading, spacing: 16) { Text("Operaciones").font(.title2.bold()); GroupBox("Servicios") { VStack(alignment: .leading) { Button("Instalar LaunchAgent", action: model.installAgent); Text("API local: 127.0.0.1:6767").foregroundStyle(.secondary) }.padding(8) }; GroupBox("Plugin LuaTools") { HStack { Button("Instalar ZIP", action: model.installPlugin); Button("Restaurar versión anterior", action: model.rollbackPlugin); Button("Desactivar", action: model.uninstallPlugin) }.padding(8) }; Text(model.pluginStatus).foregroundStyle(.secondary) }
         case .settings:
-            Form { Section("Compatibilidad") { Text("El plugin utiliza LuaLoader y el servicio local de LuaTools."); Text("NotProton no descarga CrossOver ni modifica licencias.").foregroundStyle(.secondary) } }.formStyle(.grouped)
+            Form {
+                Section("Cuenta LuaTools") {
+                    LabeledContent("Cuenta", value: model.accountName)
+                    HStack { SecureField("Código de Discord", text: $model.discordCode).frame(maxWidth: 220); Button("Iniciar sesión", action: model.signIn).disabled(model.signingIn); Button("Cerrar sesión", action: model.signOut).disabled(model.signingIn) }
+                    Text("Usa el código de /login de Discord. La sesión se guarda en el llavero de macOS.").foregroundStyle(.secondary)
+                }
+                Section("Compatibilidad") { Text("El plugin utiliza LuaLoader y el servicio local de LuaTools."); Text("NotProton no descarga CrossOver ni modifica licencias.").foregroundStyle(.secondary) }
+            }.formStyle(.grouped)
         }
     }
     private func statusCard(_ title: String, _ symbol: String, _ value: String) -> some View { VStack(alignment: .leading) { Label(title, systemImage: symbol).font(.headline); Text(value).font(.caption).foregroundStyle(.secondary) }.frame(maxWidth: .infinity, alignment: .leading).padding(14).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10)) }

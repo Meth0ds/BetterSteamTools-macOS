@@ -85,6 +85,29 @@ func fixtureManifest(depot: UInt32, gid: UInt64, size: UInt64 = 4096) -> Data {
     let metadata: [UInt8] = [0x08] + number(UInt64(depot)) + [0x10] + number(gid) + [0x20, 0x01, 0x28] + number(size)
     return Data(word(0x71f617d0) + word(0) + word(0x1f4812be) + word(UInt32(metadata.count)) + metadata + word(0x32c415ab))
 }
+func testStandaloneManifests(root: URL) throws {
+    let steam = root.appendingPathComponent("standalone-manifests")
+    let paths = SteamMacPaths(steamApp: steam.appendingPathComponent("Steam.app"), userData: steam)
+    let installer = LuaInstaller(paths: paths)
+    let sources = root.appendingPathComponent("manifest-sources")
+    try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: true)
+    let first = sources.appendingPathComponent("123_456.manifest"), second = sources.appendingPathComponent("124_457.manifest")
+    let firstBytes = fixtureManifest(depot: 123, gid: 456), secondBytes = fixtureManifest(depot: 124, gid: 457)
+    try firstBytes.write(to: first); try secondBytes.write(to: second)
+    try check(installer.installManifests(sources: [first, second]).count == 2, "standalone manifests installed")
+    let target = paths.depotCache.appendingPathComponent(first.lastPathComponent)
+    try check(Data(contentsOf: target) == firstBytes, "manifest bytes preserved")
+    _ = try installer.installManifests(sources: [target])
+    try check(Data(contentsOf: target) == firstBytes, "installing from depotcache preserves content")
+    try fixtureManifest(depot: 999, gid: 457).write(to: second)
+    var rejected = false
+    do { _ = try installer.installManifests(sources: [first, second]) } catch { rejected = true }
+    try check(rejected && Data(contentsOf: target) == firstBytes && Data(contentsOf: paths.depotCache.appendingPathComponent(second.lastPathComponent)) == secondBytes, "invalid manifest leaves the entire prior set intact")
+    let link = sources.appendingPathComponent("125_458.manifest")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: first)
+    rejected = false; do { _ = try installer.installManifests(sources: [link]) } catch { rejected = true }
+    try check(rejected, "symlinked manifest rejected")
+}
 func zip64Fixture(_ ordinary: Data) throws -> Data {
     guard let range = ordinary.range(of: Data([0x50, 0x4b, 0x05, 0x06]), options: .backwards) else { throw TestFailure(description: "ZIP end record fixture") }
     let offset = range.lowerBound
@@ -269,6 +292,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
             try testParser()
+            try await testAuthentication()
             try testInstalledLuaInventory(root: root)
             try testPluginAssets(root: root)
             try testPluginInstaller(root: root)
@@ -278,6 +302,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             try testLaunchAgent(root: root)
             let installer = try testInstallerAndRoutes(root: root)
             try testZipPackage(root: root)
+            try testStandaloneManifests(root: root)
             try testPackageTransactionCrashRecovery(root: root)
             try testRemovalRecovery(root: root)
             let server = try LocalAPIServer(installer: installer, port: 0)
