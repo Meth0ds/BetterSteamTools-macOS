@@ -135,9 +135,11 @@ public final class LuaInstaller: @unchecked Sendable {
     public func removeLua(appID: Int) throws {
         lock.lock(); defer { lock.unlock() }
         guard appID > 0, appID <= Int(UInt32.max) else { throw LuaToolsError.invalidRequest }
-        try recoverPendingTransactions()
-        let url = paths.stPlugin.appendingPathComponent("\(appID).lua")
-        if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        guard FileManager.default.fileExists(atPath: paths.stPlugin.path) else { try recoverPendingTransactions(); return }
+        try PackageTransaction(paths: paths).apply([
+            .remove("config/stplug-in/\(appID).lua"),
+            .remove("config/stplug-in/\(appID).lua.disabled")
+        ])
     }
     private func regularFile(_ url: URL) throws -> Bool {
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])

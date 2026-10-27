@@ -95,6 +95,7 @@ actor ServiceReports {
             let dispatcher = PluginRPCDispatcher()
             try await rejects("unknown RPC must fail") { _ = try await dispatcher.call(method: "Unknown", args: .object([:])) }
             try await rejects("AppID traversal must fail") { _ = try await dispatcher.call(method: "DeleteLuaToolsForApp", args: .object(["appid": .string("../../file")])) }
+            try await rejects("unimplemented backend operation rejects the plugin promise") { _ = try await dispatcher.call(method: "RestartSteam", args: .object([:])) }
             _ = try await json(root, "control/navigate")
             let fixtureRoot = FileManager.default.temporaryDirectory.appendingPathComponent("luatools-service-\(UUID().uuidString)")
             defer { try? FileManager.default.removeItem(at: fixtureRoot) }

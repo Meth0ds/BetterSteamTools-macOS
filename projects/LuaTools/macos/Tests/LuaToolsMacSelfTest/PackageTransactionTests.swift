@@ -30,6 +30,46 @@ func transactionHoldingChild(root: URL) throws {
     try transaction.apply([.init(relativePath: "config/stplug-in/42.lua", data: newLua)])
 }
 
+func removalChild(root: URL, stop: Int) throws {
+    let paths = SteamMacPaths(steamApp: root.appendingPathComponent("Steam.app"), userData: root)
+    let transaction = try PackageTransaction(paths: paths, checkpoint: { if $0 == stop { _exit(86) } })
+    try transaction.apply([.remove("config/stplug-in/42.lua"), .remove("config/stplug-in/42.lua.disabled")])
+    throw TestFailure(description: "removal child did not reach checkpoint")
+}
+
+func testRemovalRecovery(root: URL) throws {
+    let steam = root.appendingPathComponent("removal-steam", isDirectory: true)
+    let paths = SteamMacPaths(steamApp: steam.appendingPathComponent("Steam.app"), userData: steam)
+    try FileManager.default.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
+    let lua = paths.stPlugin.appendingPathComponent("42.lua"), disabled = paths.stPlugin.appendingPathComponent("42.lua.disabled")
+    for point in [-2, -1, 0, 1, 2, 3] {
+        try oldLua.write(to: lua); try newLua.write(to: disabled)
+        let child = Process(); child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        child.arguments = ["--removal-crash", steam.path, String(point)]
+        try child.run(); child.waitUntilExit(); try check(child.terminationStatus == 86, "removal checkpoint \(point)")
+        try PackageTransaction(paths: paths).recover()
+        if point == 3 {
+            try check(!FileManager.default.fileExists(atPath: lua.path) && !FileManager.default.fileExists(atPath: disabled.path), "committed removal persists")
+        } else {
+            try check(Data(contentsOf: lua) == oldLua && Data(contentsOf: disabled) == newLua, "interrupted removal restores both files")
+        }
+    }
+    try oldLua.write(to: lua); try newLua.write(to: disabled)
+    let interrupted = Process(); interrupted.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+    interrupted.arguments = ["--removal-crash", steam.path, "1"]
+    try interrupted.run(); interrupted.waitUntilExit(); try check(interrupted.terminationStatus == 86, "removal interrupted after first file")
+    let external = Data("external replacement".utf8); try external.write(to: lua)
+    var conflict = false
+    do { try PackageTransaction(paths: paths).recover() } catch { conflict = true }
+    try check(conflict && Data(contentsOf: lua) == external, "removal recovery preserves an external replacement")
+    try FileManager.default.removeItem(at: lua)
+    try PackageTransaction(paths: paths).recover()
+    try oldLua.write(to: lua); try newLua.write(to: disabled)
+    try LuaInstaller(paths: paths).removeLua(appID: 42)
+    try check(!FileManager.default.fileExists(atPath: lua.path) && !FileManager.default.fileExists(atPath: disabled.path), "removal also clears disabled Lua")
+    try LuaInstaller(paths: paths).removeLua(appID: 42)
+}
+
 func testPackageTransactionCrashRecovery(root: URL) throws {
     let steam = root.appendingPathComponent("transaction-steam", isDirectory: true)
     let paths = SteamMacPaths(steamApp: steam.appendingPathComponent("Steam.app"), userData: steam)

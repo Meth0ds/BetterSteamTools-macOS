@@ -47,7 +47,12 @@ public struct PluginRPCDispatcher: Sendable {
         let body = Data(try args.encoded().utf8)
         guard body.count <= 65_536 else { throw LuaToolsError.invalidRequest }
         let request = LocalHTTPRequest(method: route.0, path: route.1, headers: ["host": "127.0.0.1"], body: body)
-        return .string(String(decoding: router.handle(request).body, as: UTF8.self))
+        let response = router.handle(request)
+        guard (200..<300).contains(response.status) else {
+            let message = (try? JSONDecoder().decode(BridgeJSON.self, from: response.body))?["error"]?.string ?? "HTTP \(response.status)"
+            throw CDPError.remote(message)
+        }
+        return .string(String(decoding: response.body, as: UTF8.self))
     }
 }
 

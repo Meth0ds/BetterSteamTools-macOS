@@ -220,6 +220,11 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
 
 @main struct SelfTest {
     static func main() async {
+        if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--removal-crash", let point = Int(CommandLine.arguments[3]) {
+            do { try removalChild(root: URL(fileURLWithPath: CommandLine.arguments[2]), stop: point) }
+            catch { fputs("removal child failed: \(error)\n", stderr); exit(1) }
+            return
+        }
         if CommandLine.arguments.count == 6, CommandLine.arguments[1] == "--plugin-crash", let point = Int(CommandLine.arguments[5]) {
             do { try pluginCrashChild(destination: URL(fileURLWithPath: CommandLine.arguments[2]), archive: URL(fileURLWithPath: CommandLine.arguments[3]), operation: CommandLine.arguments[4], stop: point) }
             catch { fputs("plugin child failed: \(error)\n", stderr); exit(1) }
@@ -258,6 +263,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             let installer = try testInstallerAndRoutes(root: root)
             try testZipPackage(root: root)
             try testPackageTransactionCrashRecovery(root: root)
+            try testRemovalRecovery(root: root)
             let server = try LocalAPIServer(installer: installer, port: 0)
             let port = try await server.start()
             defer { server.stop() }

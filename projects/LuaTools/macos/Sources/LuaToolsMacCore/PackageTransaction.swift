@@ -8,13 +8,15 @@ import Darwin
 public struct PackageTransaction {
     public struct Write {
         let relativePath: String
-        let data: Data
+        let data: Data?
         public init(relativePath: String, data: Data) { self.relativePath = relativePath; self.data = data }
+        private init(relativePath: String) { self.relativePath = relativePath; self.data = nil }
+        public static func remove(_ relativePath: String) -> Write { Write(relativePath: relativePath) }
     }
     private struct Entry: Codable {
         let relativePath: String
         let beforeHash: String?
-        let afterHash: String
+        let afterHash: String?
         let backup: String?
     }
     private struct Journal: Codable { let version: Int; var phase: String; let entries: [Entry] }
@@ -52,7 +54,7 @@ public struct PackageTransaction {
                         try syncFile(backup)
                         guard let copied = try readFile(backup), hash(copied) == previous.map(hash) else { throw LuaToolsError.transactionFailed("El archivo cambió durante la copia de seguridad: \(write.relativePath)") }
                     }
-                    entries.append(Entry(relativePath: write.relativePath, beforeHash: previous.map(hash), afterHash: hash(write.data), backup: backupName))
+                    entries.append(Entry(relativePath: write.relativePath, beforeHash: previous.map(hash), afterHash: write.data.map(hash), backup: backupName))
                 }
                 var journal = Journal(version: 1, phase: "prepared", entries: entries)
                 try writeJournal(journal, directory: directory)
@@ -64,10 +66,17 @@ public struct PackageTransaction {
                         checkpoint?(index + 1)
                         continue
                     }
-                    try atomicWrite(write.data, to: destination, temporaryName: temporaryName(directory, index, restoring: false), beforeRename: {
-                        guard try readFile(destination).map(hash) == entries[index].beforeHash else { throw LuaToolsError.transactionFailed("El archivo cambió durante la instalación: \(write.relativePath)") }
+                    if let data = write.data {
+                        try atomicWrite(data, to: destination, temporaryName: temporaryName(directory, index, restoring: false), beforeRename: {
+                            guard try readFile(destination).map(hash) == entries[index].beforeHash else { throw LuaToolsError.transactionFailed("El archivo cambió durante la instalación: \(write.relativePath)") }
+                            checkpoint?(-index - 1)
+                        })
+                    } else {
                         checkpoint?(-index - 1)
-                    })
+                        guard try readFile(destination).map(hash) == entries[index].beforeHash else { throw LuaToolsError.transactionFailed("El archivo cambió durante la eliminación: \(write.relativePath)") }
+                        guard unlink(destination.path) == 0 else { throw posix("remove", destination) }
+                        try syncDirectory(destination.deletingLastPathComponent())
+                    }
                     checkpoint?(index + 1)
                 }
                 journal.phase = "committed"
@@ -116,7 +125,7 @@ public struct PackageTransaction {
         // Validate every path and backup before changing any target.
         for (index, entry) in journal.entries.enumerated() {
             _ = try target(entry.relativePath)
-            guard entry.afterHash.count == 64, entry.beforeHash?.count == 64 || entry.beforeHash == nil else { throw LuaToolsError.transactionFailed("Hash de recuperación inválido") }
+            guard entry.afterHash?.count == 64 || entry.afterHash == nil, entry.beforeHash?.count == 64 || entry.beforeHash == nil else { throw LuaToolsError.transactionFailed("Hash de recuperación inválido") }
             if let backup = entry.backup {
                 guard backup == "backup-\(index)", entry.beforeHash != nil else { throw LuaToolsError.transactionFailed("Copia de seguridad no válida") }
             } else if entry.beforeHash != nil { throw LuaToolsError.transactionFailed("Falta una copia de seguridad") }
@@ -157,10 +166,10 @@ public struct PackageTransaction {
         if parts.count == 3 && parts[0] == "config" && parts[1] == "stplug-in" { filename = parts[2] }
         else if parts.count == 2 && parts[0] == "depotcache" { filename = parts[1] }
         else { throw LuaToolsError.transactionFailed("Ruta de recuperación inválida") }
-        let pattern = parts.count == 3 ? #"^[1-9][0-9]{0,9}\.lua$"# : #"^[1-9][0-9]{0,9}_[1-9][0-9]{0,19}\.manifest$"#
+        let pattern = parts.count == 3 ? #"^[1-9][0-9]{0,9}\.lua(?:\.disabled)?$"# : #"^[1-9][0-9]{0,9}_[1-9][0-9]{0,19}\.manifest$"#
         guard filename.range(of: pattern, options: .regularExpression) != nil else { throw LuaToolsError.transactionFailed("Nombre de recuperación inválido") }
         if parts.count == 3 {
-            guard let id = UInt32(filename.dropLast(4)), id > 0 else { throw LuaToolsError.transactionFailed("AppID de recuperación inválido") }
+            guard let id = UInt32(filename.split(separator: ".").first ?? ""), id > 0 else { throw LuaToolsError.transactionFailed("AppID de recuperación inválido") }
         } else {
             let values = filename.dropLast(".manifest".count).split(separator: "_")
             guard values.count == 2, let depot = UInt32(values[0]), depot > 0, let gid = UInt64(values[1]), gid > 0 else { throw LuaToolsError.transactionFailed("Depot de recuperación inválido") }
