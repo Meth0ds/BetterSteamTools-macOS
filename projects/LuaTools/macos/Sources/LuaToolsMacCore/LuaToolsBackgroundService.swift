@@ -28,7 +28,9 @@ public actor LuaToolsBackgroundService {
     }
     @_spi(Testing) public init(installer: LuaInstaller, pluginDirectory: URL?, port: UInt16, inspectorEndpoint: URL,
                                inspectorAuthorizer: @escaping @Sendable (URL) throws -> Void) {
-        self.installer = installer; self.router = LocalAPIRouter(installer: installer)
+        self.installer = installer
+        let account = LuaToolsAuthentication()
+        self.router = LocalAPIRouter(installer: installer, addCoordinator: PluginAddCoordinator(api: LuaToolsAPIClient(authentication: account), installer: installer))
         self.pluginDirectory = pluginDirectory; self.port = port; self.inspectorEndpoint = inspectorEndpoint
         self.inspectorAuthorizer = inspectorAuthorizer
     }

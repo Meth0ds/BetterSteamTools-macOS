@@ -88,7 +88,9 @@ public final class LuaInstaller: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard appID > 0, appID <= Int(UInt32.max) else { throw LuaToolsError.invalidRequest }
         guard try regularFile(source), source.pathExtension.lowercased() == "lua" else { throw LuaToolsError.invalidRequest }
-        let contents = try boundedData(source, maximum: 16 * 1024 * 1024)
+        return try installLuaData(appID: appID, contents: boundedData(source, maximum: 16 * 1024 * 1024))
+    }
+    private func installLuaData(appID: Int, contents: Data) throws -> LuaInstallResult {
         guard contents.count <= 16 * 1024 * 1024, String(data: contents, encoding: .utf8) != nil else { throw LuaToolsError.invalidRequest }
         let fm = FileManager.default
         try fm.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
@@ -99,7 +101,17 @@ public final class LuaInstaller: @unchecked Sendable {
     public func installZip(appID: Int, zip: URL) throws -> LuaInstallResult {
         lock.lock(); defer { lock.unlock() }
         guard appID > 0, appID <= Int(UInt32.max), try regularFile(zip), zip.pathExtension.lowercased() == "zip" else { throw LuaToolsError.invalidRequest }
-        let archive = try ZipArchiveReader(data: boundedData(zip, maximum: 256 * 1024 * 1024)).entries()
+        return try installZipData(appID: appID, data: boundedData(zip, maximum: 256 * 1024 * 1024))
+    }
+    /// Windows sources may return a bare Lua instead of the advertised ZIP.
+    public func installDownloaded(appID: Int, data: Data) throws -> LuaInstallResult {
+        lock.lock(); defer { lock.unlock() }
+        guard appID > 0, appID <= Int(UInt32.max), !data.isEmpty else { throw LuaToolsError.invalidRequest }
+        if data.starts(with: [0x50, 0x4b, 0x03, 0x04]) { return try installZipData(appID: appID, data: data) }
+        return try installLuaData(appID: appID, contents: data)
+    }
+    private func installZipData(appID: Int, data: Data) throws -> LuaInstallResult {
+        let archive = try ZipArchiveReader(data: data).entries()
         let luaFiles = archive.filter { URL(fileURLWithPath: $0.path).pathExtension.lowercased() == "lua" }
         let lua: ZipArchiveReader.Entry
         if luaFiles.count == 1 { lua = luaFiles[0] }

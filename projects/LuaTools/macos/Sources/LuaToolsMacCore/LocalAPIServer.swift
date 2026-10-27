@@ -61,7 +61,46 @@ public struct LocalHTTPRequestParser: Sendable {
 
 public struct LocalAPIRouter: Sendable {
     public let installer: LuaInstaller
-    public init(installer: LuaInstaller = LuaInstaller()) { self.installer = installer }
+    private let addCoordinator: PluginAddCoordinator?
+    public init(installer: LuaInstaller = LuaInstaller(), addCoordinator: PluginAddCoordinator? = nil) { self.installer = installer; self.addCoordinator = addCoordinator }
+    public func handleAsync(_ request: LocalHTTPRequest) async -> LocalHTTPResponse {
+        let fallback = handle(request)
+        guard fallback.status == 501, let coordinator = addCoordinator else { return fallback }
+        let parts = request.path.split(separator: "/", omittingEmptySubsequences: false)
+        guard parts.count == 3, ["add", "add-status", "add-source", "cancel"].contains(String(parts[1])) else { return fallback }
+        guard let id = UInt32(parts[2]), id > 0, String(id) == parts[2] else { return .error(400, "Invalid AppID") }
+        let action = String(parts[1]), expectedMethod = action == "add-status" ? "GET" : "POST"
+        guard request.method == expectedMethod else { return .error(405, "Method not allowed") }
+        do {
+            switch action {
+            case "add":
+                let body = try JSONDecoder().decode(BridgeJSON.self, from: request.body.isEmpty ? Data("{}".utf8) : request.body)
+                try await coordinator.start(appID: id, name: body["name"]?.string)
+                return .init(json: ["success": true])
+            case "add-source":
+                let body = try JSONDecoder().decode(BridgeJSON.self, from: request.body)
+                guard let source = body["source"]?.string else { return .error(400, "Source is required") }
+                try await coordinator.pick(appID: id, source: source)
+                return .init(json: ["success": true])
+            case "cancel":
+                try await coordinator.cancel(appID: id)
+                return .init(json: ["success": true])
+            default:
+                let state = await coordinator.state(appID: id)
+                let sources: [[String: any Sendable]] = (state?.sources ?? []).map { source in
+                    let keyed = source.name == "Sadie (Morrenus)"
+                    return ["name": source.name, "displayName": keyed ? "Sadie (Hubcap)" : source.name, "status": source.status,
+                            "available": source.available, "canDownload": source.available && !keyed, "locked": keyed,
+                            "needsKey": keyed, "downloading": state?.busy == true && state?.activeSource == source.name,
+                            "progress": 0, "indeterminate": state?.busy == true && state?.activeSource == source.name]
+                }
+                return .init(json: ["success": true, "appid": id, "checking": state?.checking ?? false,
+                                    "fastFetch": false, "sourcesLoaded": state?.sourcesLoaded ?? false, "sources": sources,
+                                    "installStatus": state?.installStatus ?? "", "error": state?.error ?? "",
+                                    "installFailed": state?.error != nil, "installed": installer.hasLua(appID: Int(id))])
+            }
+        } catch { return .error(400, error.localizedDescription) }
+    }
     public func handle(_ request: LocalHTTPRequest) -> LocalHTTPResponse {
         if let origin = request.headers["origin"], origin != "https://store.steampowered.com" { return .error(403, "Origin not allowed") }
         if let host = request.headers["host"] {
@@ -163,7 +202,7 @@ public final class LocalAPIServer: @unchecked Sendable {
             var next = parser
             do {
                 if let request = try next.append(data ?? Data()) {
-                    self.send(connection, self.router.handle(request)); return
+                    Task { let response = await self.router.handleAsync(request); self.send(connection, response) }; return
                 }
                 if complete { self.send(connection, .error(400, "Incomplete request")); return }
                 self.receive(connection, parser: next)

@@ -13,6 +13,13 @@ private actor StatusLog {
 
 @main struct LuaToolsDaemon {
     static func main() async {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--check-sources", let id = UInt32(CommandLine.arguments[2]), id > 0 {
+            do {
+                let results = try await LuaToolsAPIClient(authentication: LuaToolsAuthentication()).checkSources(appID: id)
+                print("LuaToolsDaemon: source service returned \(results.count) entries")
+            } catch { fputs("LuaToolsDaemon: source check failed: \(error.localizedDescription)\n", stderr); exit(1) }
+            return
+        }
         if CommandLine.arguments == [CommandLine.arguments[0], "--check-bundle"] {
             do {
                 guard let resources = Bundle.main.resourceURL else { throw LuaToolsError.invalidRequest }
