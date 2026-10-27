@@ -15,11 +15,13 @@ struct LuaToolsMacApp: App {
     @Published var status = "Preparado"
     @Published var appID = ""
     @Published var pluginStatus = "Plugin pendiente de instalación"
+    @Published var installedGames: [InstalledLua] = []
     @Published var selected: LuaToolsSection = .overview
     private let paths = SteamMacPaths.detected
     private let installer = LuaInstaller()
     private var service: LuaToolsBackgroundService?
     init() {
+        refresh()
         Task { await startLocalService() }
     }
     private func startLocalService() async {
@@ -41,7 +43,8 @@ struct LuaToolsMacApp: App {
     }
     func refresh() {
         let steam = FileManager.default.fileExists(atPath: paths.infoPlist.path) ? "Steam detectado" : "Steam no encontrado"
-        status = "\(steam) · Lua: \(paths.stPlugin.path)"
+        do { installedGames = try InstalledLuaInventory(paths: paths).list(); status = "\(steam) · \(installedGames.count) Lua instalados" }
+        catch { status = "No se pudieron leer los Lua: \(error.localizedDescription)" }
     }
     func installLua() {
         guard let id = Int(appID) else { status = "AppID no válido"; return }
@@ -51,14 +54,14 @@ struct LuaToolsMacApp: App {
         guard let id = Int(appID), id > 0 else { status = "Introduce un AppID válido"; return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "lua")!]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let source = panel.url else { return }
-        do { let result = try installer.installLua(appID: id, source: source); status = "Lua instalado en \(result.luaURL.path)" }
+        do { let result = try installer.installLua(appID: id, source: source); refresh(); status = "Lua instalado en \(result.luaURL.path)" }
         catch { status = "No se pudo instalar el Lua: \(error.localizedDescription)" }
     }
     func installPackage() {
         guard let id = Int(appID), id > 0 else { status = "Introduce un AppID válido"; return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "zip")!]; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let source = panel.url else { return }
-        do { let result = try installer.installZip(appID: id, zip: source); status = "Paquete instalado: \(result.manifests) manifest(s)" }
+        do { let result = try installer.installZip(appID: id, zip: source); refresh(); status = "Paquete instalado: \(result.manifests) manifest(s)" }
         catch { status = "No se pudo instalar el paquete: \(error.localizedDescription)" }
     }
     func activateBST() {
@@ -150,7 +153,18 @@ struct ContentView: View {
                 Text(model.status).foregroundStyle(.secondary)
             }
         case .games:
-            VStack(alignment: .leading, spacing: 18) { Text("Juegos añadidos").font(.title2.bold()); Text("La biblioteca mostrará el modo automático: nativo macOS, NotProton/CrossOver o selección manual.").foregroundStyle(.secondary); ContentUnavailableView("Esperando sincronización con Steam", systemImage: "gamecontroller", description: Text("Abre Steam y conecta el plugin para cargar los juegos.")) }
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Juegos añadidos").font(.title2.bold())
+                if model.installedGames.isEmpty { ContentUnavailableView("No hay Lua instalados", systemImage: "gamecontroller", description: Text("Instala un archivo Lua o un paquete ZIP para verlo aquí.")) }
+                else {
+                    ForEach(model.installedGames) { game in
+                        HStack {
+                            VStack(alignment: .leading) { Text(game.name ?? "App \(game.appID)").font(.headline); Text("AppID \(game.appID)").font(.caption).foregroundStyle(.secondary) }
+                            Spacer(); Text(game.modified, style: .date).foregroundStyle(.secondary)
+                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
         case .lua:
             VStack(alignment: .leading, spacing: 16) { Text("Lua y depots").font(.title2.bold()); Text("Los Lua se guardan en stplug-in y los manifests binarios en depotcache, sin cambiar el formato de Windows.").foregroundStyle(.secondary); HStack { TextField("AppID", text: $model.appID).textFieldStyle(.roundedBorder).frame(width: 170); Button("Comprobar", action: model.installLua); Button("Instalar Lua", action: model.installLuaFromPanel); Button("Instalar ZIP", action: model.installPackage) }; GroupBox("Rutas") { VStack(alignment: .leading) { Text(SteamMacPaths.detected.stPlugin.path); Text(SteamMacPaths.detected.depotCache.path) }.font(.caption.monospaced()).padding(8) } }
         case .operations:

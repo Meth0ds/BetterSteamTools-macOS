@@ -60,6 +60,21 @@ func testInstallerAndRoutes(root: URL) throws -> LuaInstaller {
     try installer.removeLua(appID: 42)
     return installer
 }
+func testInstalledLuaInventory(root: URL) throws {
+    let steam = root.appendingPathComponent("inventory-steam")
+    let paths = SteamMacPaths(steamApp: steam.appendingPathComponent("Steam.app"), userData: steam)
+    let inventory = InstalledLuaInventory(paths: paths)
+    try check(inventory.list().isEmpty, "missing Lua folder is empty")
+    try FileManager.default.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
+    try Data("-- Created by LuaTools\n-- Fixture Game\naddappid(42)".utf8).write(to: paths.stPlugin.appendingPathComponent("42.lua"))
+    try Data("-- other".utf8).write(to: paths.stPlugin.appendingPathComponent("43.lua"))
+    try Data("-- not a game".utf8).write(to: paths.stPlugin.appendingPathComponent("Steamtools.lua"))
+    try Data("-- disabled".utf8).write(to: paths.stPlugin.appendingPathComponent("44.lua.disabled"))
+    try FileManager.default.createSymbolicLink(at: paths.stPlugin.appendingPathComponent("45.lua"), withDestinationURL: paths.stPlugin.appendingPathComponent("42.lua"))
+    let installed = try inventory.list()
+    try check(Set(installed.map(\.appID)) == Set([42, 43]), "inventory lists only regular numeric Lua files")
+    try check(installed.first(where: { $0.appID == 42 })?.name == "Fixture Game", "Windows-style Lua title parsed")
+}
 func fixtureManifest(depot: UInt32, gid: UInt64, size: UInt64 = 4096) -> Data {
     func number(_ value: UInt64) -> [UInt8] {
         var remaining = value, result: [UInt8] = []
@@ -254,6 +269,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: root) }
             try testParser()
+            try testInstalledLuaInventory(root: root)
             try testPluginAssets(root: root)
             try testPluginInstaller(root: root)
             try testInspectorOwnerPaths(root: root)
