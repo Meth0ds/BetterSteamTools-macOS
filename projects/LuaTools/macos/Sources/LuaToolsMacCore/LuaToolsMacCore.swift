@@ -218,14 +218,14 @@ public enum LuaToolsError: LocalizedError {
 public struct SteamActivation: Sendable {
     public let paths: SteamMacPaths
     public let helper: URL?
-    public init(paths: SteamMacPaths = .detected, helper: URL? = Bundle.main.url(forResource: "bst-macos", withExtension: nil)) {
+    public init(paths: SteamMacPaths = .detected, helper: URL? = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/bst-macos")) {
         self.paths = paths; self.helper = helper
     }
     public func activate(dylib: URL, manifest: URL, dryRun: Bool = false) throws {
         guard let helper, FileManager.default.isExecutableFile(atPath: helper.path) else { throw LuaToolsError.missingInstaller }
         var arguments = ["install", "--dylib", dylib.path, "--manifest", manifest.path]
         if dryRun { arguments.append("--dry-run") }
-        try Shell.run(helper.path, arguments, environment: ["BST_STEAM_APP_PATH": paths.steamApp.path])
+        try Shell.run(helper.path, arguments, environment: ["BST_STEAM_APP_PATH": paths.steamApp.path, "BST_STEAM_USERDATA_PATH": paths.userData.path])
     }
 }
 
@@ -233,9 +233,11 @@ public enum Shell {
     @discardableResult public static func run(_ executable: String, _ arguments: [String], environment: [String: String] = [:]) throws -> String {
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, supplied in supplied }
-        let output = Pipe(); let error = Pipe(); process.standardOutput = output; process.standardError = error
-        try process.run(); process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw LuaToolsError.invalidRequest }
-        return String(data: output.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let output = Pipe(); process.standardOutput = output; process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
+        let message = String(decoding: data.prefix(4096), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationStatus == 0 else { throw LuaToolsError.transactionFailed(message.isEmpty ? "La operación falló" : message) }
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }

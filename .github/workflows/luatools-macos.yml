@@ -6,11 +6,13 @@ on:
     paths:
       - '.github/workflows/luatools-macos.yml'
       - 'projects/LuaTools/macos/**'
+      - 'projects/BetterSteamTools/macos/**'
   push:
     branches: [main]
     paths:
       - '.github/workflows/luatools-macos.yml'
       - 'projects/LuaTools/macos/**'
+      - 'projects/BetterSteamTools/macos/**'
 
 defaults:
   run:

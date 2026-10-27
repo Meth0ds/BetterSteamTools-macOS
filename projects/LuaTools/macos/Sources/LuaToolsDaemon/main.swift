@@ -25,7 +25,8 @@ private actor StatusLog {
                 guard let resources = Bundle.main.resourceURL else { throw LuaToolsError.invalidRequest }
                 _ = try PluginFrontend(pluginDirectory: resources.appendingPathComponent("plugin-macos"))
                 try PluginFrontend.validateBridgeResource()
-                print("LuaToolsDaemon: bundled plugin and bridge verified")
+                _ = try BSTHelper().diagnose()
+                print("LuaToolsDaemon: bundled plugin, bridge and BetterSteamTools helper verified")
             } catch { fputs("LuaToolsDaemon: bundle verification failed: \(error.localizedDescription)\n", stderr); exit(1) }
             return
         }

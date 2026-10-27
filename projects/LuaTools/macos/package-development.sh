@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BST_ROOT=$(CDPATH= cd -- "$ROOT/../../BetterSteamTools/macos" && pwd)
 OUTPUT=${1:-"$ROOT/.build/LuaTools-macOS-development.zip"}
 case "$OUTPUT" in /*) ;; *) OUTPUT="$PWD/$OUTPUT" ;; esac
 if [ "$(uname -m)" != arm64 ]; then printf '%s\n' 'Apple Silicon is required' >&2; exit 1; fi
@@ -10,10 +11,13 @@ TEMP=$(mktemp -d "$ROOT/.build/luatools-package.XXXXXXXX")
 trap 'rm -rf "$TEMP"' EXIT HUP INT TERM
 swift build --package-path "$ROOT" -c release --product LuaToolsMac
 swift build --package-path "$ROOT" -c release --product LuaToolsDaemon
+swift build --package-path "$BST_ROOT" -c release --product bst-macos
 BIN=$(swift build --package-path "$ROOT" -c release --show-bin-path)
+BST_BIN=$(swift build --package-path "$BST_ROOT" -c release --show-bin-path)
 APP="$TEMP/LuaTools.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/LuaToolsMac" "$BIN/LuaToolsDaemon" "$APP/Contents/MacOS/"
+cp "$BST_BIN/bst-macos" "$APP/Contents/MacOS/"
 ditto "$BIN/LuaToolsMac_LuaToolsMacCore.bundle" "$APP/Contents/Resources/LuaToolsMac_LuaToolsMacCore.bundle"
 ditto "$ROOT/plugin-macos" "$APP/Contents/Resources/plugin-macos"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -35,6 +39,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 codesign --force --sign - "$APP/Contents/MacOS/LuaToolsDaemon"
+codesign --force --sign - "$APP/Contents/MacOS/bst-macos"
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 "$APP/Contents/MacOS/LuaToolsDaemon" --check-bundle

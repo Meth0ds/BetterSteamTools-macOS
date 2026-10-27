@@ -307,6 +307,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             try await testPluginAddFlow(root: root)
             try await testAccountFileLock(root: root)
             try testInstalledLuaInventory(root: root)
+            try testBSTHelper(root: root)
             try testPluginAssets(root: root)
             try testPluginInstaller(root: root)
             try testInspectorOwnerPaths(root: root)

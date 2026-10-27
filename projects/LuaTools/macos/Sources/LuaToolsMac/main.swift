@@ -19,6 +19,8 @@ struct LuaToolsMacApp: App {
     @Published var discordCode = ""
     @Published var accountName = "Invitado"
     @Published var signingIn = false
+    @Published var notProtonStatus = "Comprobando NotProton…"
+    @Published var notProtonDetails = ""
     @Published var selected: LuaToolsSection = .overview
     private let paths = SteamMacPaths.detected
     private let installer = LuaInstaller()
@@ -50,6 +52,14 @@ struct LuaToolsMacApp: App {
         let steam = FileManager.default.fileExists(atPath: paths.infoPlist.path) ? "Steam detectado" : "Steam no encontrado"
         do { installedGames = try InstalledLuaInventory(paths: paths).list(); status = "\(steam) · \(installedGames.count) Lua instalados" }
         catch { status = "No se pudieron leer los Lua: \(error.localizedDescription)" }
+        let detectedPaths = paths
+        Task {
+            do {
+                let report = try await Task.detached(priority: .utility) { try BSTHelper(paths: detectedPaths).diagnose() }.value
+                notProtonStatus = report.readyForWindowsGames ? "NotProton preparado" : "NotProton requiere atención"
+                notProtonDetails = report.readyForWindowsGames ? "\(report.preferredTool ?? "NotProton") · CrossOver \(report.preferredBuild ?? "")" : report.message
+            } catch { notProtonStatus = "Diagnóstico no disponible"; notProtonDetails = error.localizedDescription }
+        }
     }
     func installLua() {
         guard let id = Int(appID) else { status = "AppID no válido"; return }
@@ -174,7 +184,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 22) {
                 Text("Gestiona Steam desde macOS").font(.largeTitle.bold())
                 Text("LuaTools conserva el flujo de Windows y usa NotProton solo cuando un juego necesita CrossOver.").foregroundStyle(.secondary)
-                HStack { statusCard("Steam", "steam", FileManager.default.fileExists(atPath: SteamMacPaths.detected.infoPlist.path) ? "Detectado" : "No encontrado"); statusCard("Plugin", "puzzlepiece.extension", model.pluginStatus) }
+                HStack { statusCard("Steam", "steam", FileManager.default.fileExists(atPath: SteamMacPaths.detected.infoPlist.path) ? "Detectado" : "No encontrado"); statusCard("Plugin", "puzzlepiece.extension", model.pluginStatus); statusCard("Compatibilidad", "macwindow", model.notProtonStatus) }
+                Text(model.notProtonDetails).font(.caption).foregroundStyle(.secondary)
                 GroupBox("Acciones rápidas") { HStack { Button("Activar BetterSteamTools", action: model.activateBST); Button("Abrir Steam para LuaLoader", action: model.launchSteamForPlugin); Button("Conectar plugin", action: model.injectCDP); Button("LaunchAgent", action: model.installAgent); Spacer() }.padding(8) }
                 Text(model.status).foregroundStyle(.secondary)
             }

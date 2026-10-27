@@ -14,6 +14,18 @@ struct BSTMacCLI {
         switch command {
         case "doctor":
             let status = NotProtonDiagnostics().inspect(paths: paths)
+            if args.contains("--json") {
+                struct DoctorResult: Encodable {
+                    let steamApp: String; let installed: Bool; let readyForWindowsGames: Bool; let crossOverDetected: Bool
+                    let preferredTool: String?; let preferredBuild: String?; let message: String
+                }
+                let report = DoctorResult(steamApp: paths.steamApp.path, installed: status.installed,
+                    readyForWindowsGames: status.readyForWindowsGames, crossOverDetected: status.crossOverDetected,
+                    preferredTool: status.preferredTool?.name, preferredBuild: status.preferredTool?.build, message: status.message)
+                let data = try JSONEncoder().encode(report)
+                guard let text = String(data: data, encoding: .utf8) else { throw CocoaError(.fileWriteInapplicableStringEncoding) }
+                print(text); return
+            }
             print("Steam: \(paths.steamApp.path)")
             print("NotProton: \(status.message)")
             print("Runners: \(status.runnerDirectories.map(\.lastPathComponent).joined(separator: ", "))")

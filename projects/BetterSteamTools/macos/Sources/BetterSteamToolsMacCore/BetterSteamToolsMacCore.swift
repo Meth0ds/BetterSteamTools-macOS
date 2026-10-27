@@ -41,8 +41,8 @@ public struct SteamPaths: Sendable {
             URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Applications/Steam.app")
         ].compactMap { $0 }
         let app = candidates.first(where: { fm.fileExists(atPath: $0.path) }) ?? candidates[0]
-        let userData = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support/Steam", isDirectory: true)
+        let userData = ProcessInfo.processInfo.environment["BST_STEAM_USERDATA_PATH"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/Steam", isDirectory: true)
         return SteamPaths(steamApp: app, userData: userData)
     }
 
