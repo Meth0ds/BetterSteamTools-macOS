@@ -4,6 +4,10 @@ import Foundation
 /// otherwise resolve against store.steampowered.com when CDP executes the frontend.
 public struct PluginFrontend: Sendable {
     public let script: String
+    public static func validateBridgeResource() throws {
+        guard let bridge = Bundle.module.url(forResource: "CDPBridge", withExtension: "js"),
+              !(try text(bridge, limit: 1_048_576)).isEmpty else { throw LuaToolsError.invalidRequest }
+    }
     public init(pluginDirectory: URL) throws {
         let root = pluginDirectory.appendingPathComponent("public", isDirectory: true)
         let javascript = try Self.text(root.appendingPathComponent("luatools.js"), limit: 1_048_576)

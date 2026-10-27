@@ -54,3 +54,9 @@ jobs:
 
       - name: Test macOS plugin lifecycle and RPC
         run: lua macos/Tests/Plugin/PluginTests.lua "$PWD/macos/plugin-macos/backend"
+      - name: Package development application
+        run: sh macos/package-development.sh "$RUNNER_TEMP/LuaTools-macOS-development.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LuaTools-macOS-development
+          path: ${{ runner.temp }}/LuaTools-macOS-development.zip
