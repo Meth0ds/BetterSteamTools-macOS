@@ -3,8 +3,8 @@ import CryptoKit
 import BetterSteamToolsMacCore
 
 private func word(_ value: UInt64, _ count: Int) -> Data { Data((0..<count).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }) }
-private func fixture(magic: UInt32, oslist: String, arch: String?, duplicate: Bool = false, sparse: Bool = false, launchType: String? = nil) -> Data {
-    let names = ["appinfo", "common", "name", "oslist", "config", "launch", "0", "osarch", "appid", "type"]
+private func fixture(magic: UInt32, oslist: String, arch: String?, duplicate: Bool = false, sparse: Bool = false, launchType: String? = nil, executable: String? = nil, beta: String? = nil, launchOS: String = "macos") -> Data {
+    let names = ["appinfo", "common", "name", "oslist", "config", "launch", "0", "osarch", "appid", "type", "executable", "betakey"]
     let indexed = magic == 0x07564429
     func key(_ name: String) -> Data { indexed ? word(UInt64(names.firstIndex(of: name)!), 4) : Data(name.utf8) + Data([0]) }
     func open(_ name: String) -> Data { Data([0]) + key(name) }
@@ -12,14 +12,16 @@ private func fixture(magic: UInt32, oslist: String, arch: String?, duplicate: Bo
     let end = Data([8])
     var common = value("name", "Fixture Game") + value("oslist", oslist)
     if duplicate { common += value("oslist", "windows") }
-    var launchConfig = value("oslist", "macos")
+    var launchConfig = value("oslist", launchOS)
     if let arch { launchConfig += value("osarch", arch) }
+    if let beta { launchConfig += value("betakey", beta) }
     var body = Data()
     if sparse {
         for part in [open("appinfo"), Data([2]) + key("appid") + word(42, 4), end, end] { body.append(part) }
     } else {
         let type = launchType.map { value("type", $0) } ?? Data()
-        for part in [open("appinfo"), open("common"), common, end, open("config"), open("launch"), open("0"), type, open("config"), launchConfig, end, end, end, end, end, end] { body.append(part) }
+        let executablePart = executable.map { value("executable", $0) } ?? Data()
+        for part in [open("appinfo"), open("common"), common, end, open("config"), open("launch"), open("0"), type, executablePart, open("config"), launchConfig, end, end, end, end, end, end] { body.append(part) }
     }
     let metaLength = magic >= 0x07564428 ? 60 : 40
     var metadata = Data(repeating: 0, count: metaLength)
@@ -50,6 +52,8 @@ func testSteamAppInfo(root: URL) throws {
     try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "unknown macOS architecture remains ambiguous")
     try fixture(magic: 0x07564429, oslist: "windows,macos", arch: "64", launchType: "editor").write(to: url)
     try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "auxiliary macOS editor does not imply a native default game")
+    try fixture(magic: 0x07564429, oslist: "windows,macos", arch: "64", beta: "preview").write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "beta-only macOS launch does not classify the default game")
     try fixture(magic: 0x07564429, oslist: "", arch: nil, sparse: true).write(to: url)
     let sparse = try SteamAppInfoReader(url: url).read(appID: 42)
     try check(sparse?.name == nil && sparse?.platforms.isEmpty == true && sparse?.supportsMacOS64Bit == nil, "valid sparse appinfo has no invented metadata")
@@ -66,4 +70,27 @@ func testSteamAppInfo(root: URL) throws {
     try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "corrupt metadata never chooses a route")
     invalid = fixture(magic: 0x07564429, oslist: "windows", arch: nil); invalid.removeLast(); try invalid.write(to: url)
     try rejects("truncated string table rejected") { _ = try SteamAppInfoReader(url: url).read(appID: 42) }
+
+    let library = SteamLibrary(root: folder)
+    let game = library.common.appendingPathComponent("Game")
+    let bundle = game.appendingPathComponent("Real Game.app/Contents/MacOS")
+    try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+    try "\"AppState\" { \"appid\" \"42\" \"installdir\" \"Game\" }".write(to: library.steamapps.appendingPathComponent("appmanifest_42.acf"), atomically: true, encoding: .utf8)
+    try machO().write(to: bundle.appendingPathComponent("Game"))
+    try PropertyListSerialization.data(fromPropertyList: ["CFBundleExecutable": "Game"], format: .xml, options: 0).write(to: bundle.deletingLastPathComponent().appendingPathComponent("Info.plist"))
+    try pe().write(to: game.appendingPathComponent("game.exe"))
+    try fixture(magic: 0x07564429, oslist: "windows", arch: nil).write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .crossover, "Windows metadata wins over unrelated native helper")
+    try fixture(magic: 0x07564429, oslist: "windows,macos", arch: nil, executable: "Real Game.app").write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .native, "declared installed macOS game resolves ambiguous architecture")
+    try fixture(magic: 0x07564429, oslist: "windows,macos", arch: nil, executable: "game.exe", launchOS: "windows").write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .crossover, "declared installed Windows game resolves ambiguous architecture")
+    try machO().write(to: library.common.appendingPathComponent("outside"))
+    try fixture(magic: 0x07564429, oslist: "windows,macos", arch: nil, executable: "../outside").write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "launch paths outside the installed game cannot classify it")
+    try FileManager.default.createSymbolicLink(at: game.appendingPathComponent("linked"), withDestinationURL: library.common.appendingPathComponent("outside"))
+    try fixture(magic: 0x07564429, oslist: "windows,macos", arch: nil, executable: "linked").write(to: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "launch symlinks outside the installed game cannot classify it")
+    try FileManager.default.removeItem(at: url)
+    try check(GameRouter().plan(appID: 42, paths: paths).mode == .auto, "mixed binaries without metadata remain ambiguous")
 }

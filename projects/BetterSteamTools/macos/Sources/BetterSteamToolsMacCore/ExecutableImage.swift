@@ -52,8 +52,56 @@ public enum ExecutableImage {
         return slices
     }
     public static func machOSlices(at url: URL) -> [Slice] {
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return [] }
-        return (try? machOSlices(data)) ?? []
+        // Game executables can be many gigabytes. Read just the universal table
+        // and each Mach-O header instead of copying the entire mapped file.
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey]), values.isRegularFile == true,
+              let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        do {
+            let length = try handle.seekToEnd()
+            func read(_ offset: UInt64, _ count: Int) throws -> [UInt8] {
+                guard offset <= length, UInt64(count) <= length - offset else { throw ImageError.malformed }
+                try handle.seek(toOffset: offset)
+                var data = Data()
+                while data.count < count {
+                    guard let part = try handle.read(upToCount: count - data.count), !part.isEmpty else { throw ImageError.malformed }
+                    data.append(part)
+                }
+                return Array(data)
+            }
+            func thin(_ offset: UInt64, _ size: UInt64) throws -> Slice {
+                guard size >= 28 else { throw ImageError.malformed }
+                let bytes = try read(offset, Int(min(size, 32)))
+                let magic = try uint32(bytes, 0, little: false)
+                guard [0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe].contains(magic) else { throw ImageError.malformed }
+                let little = [0xcefaedfe, 0xcffaedfe].contains(magic)
+                let is64 = [0xfeedfacf, 0xcffaedfe].contains(magic)
+                let headerSize: UInt64 = is64 ? 32 : 28
+                guard size >= headerSize, UInt64(try uint32(bytes, 20, little: little)) <= size - headerSize else { throw ImageError.malformed }
+                return Slice(cpu: try uint32(bytes, 4, little: little), fileType: try uint32(bytes, 12, little: little), is64Bit: is64)
+            }
+            let prefix = try read(0, 8)
+            let magic = try uint32(prefix, 0, little: false)
+            guard [0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca].contains(magic) else { return [try thin(0, length)] }
+            let little = [0xbebafeca, 0xbfbafeca].contains(magic)
+            let fat64 = [0xcafebabf, 0xbfbafeca].contains(magic)
+            let count = Int(try uint32(prefix, 4, little: little))
+            let stride = fat64 ? 32 : 20
+            guard count > 0, count <= 32 else { throw ImageError.malformed }
+            let tableEnd = UInt64(8 + stride * count)
+            let table = try read(8, stride * count)
+            var slices: [Slice] = []
+            for index in 0..<count {
+                let base = index * stride
+                let offset = fat64 ? try uint64(table, base + 8, little: little) : UInt64(try uint32(table, base + 8, little: little))
+                let size = fat64 ? try uint64(table, base + 16, little: little) : UInt64(try uint32(table, base + 12, little: little))
+                guard offset >= tableEnd, offset <= length, size <= length - offset else { throw ImageError.malformed }
+                let slice = try thin(offset, size)
+                guard slice.cpu == (try uint32(table, base, little: little)) else { throw ImageError.malformed }
+                slices.append(slice)
+            }
+            return slices
+        } catch { return [] }
     }
     public static func isWindowsExecutable(at url: URL) -> Bool {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }

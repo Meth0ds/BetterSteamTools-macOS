@@ -123,7 +123,7 @@ public struct GameDetector: Sendable {
         let fm = FileManager.default
         let root = game.installURL.resolvingSymlinksInPath()
         guard fm.fileExists(atPath: root.path) else { return .unknown }
-        var windows = false
+        var windows = false, native = false
         let ignored = Set(["_commonredist", "redist", "redistributables", "compatdata", "steamapps", "__macosx"])
         guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles]) else { return .unknown }
         var scanned = 0
@@ -139,7 +139,7 @@ public struct GameDetector: Sendable {
                 enumerator.skipDescendants(); continue
             }
             if url.pathExtension.lowercased() == "app" {
-                if Self.hasNativeBundleExecutable(url) { return .nativeMacOS }
+                if Self.hasNativeBundleExecutable(url) { native = true }
                 enumerator.skipDescendants(); continue
             }
             guard values?.isRegularFile == true else { continue }
@@ -147,9 +147,35 @@ public struct GameDetector: Sendable {
                 windows = windows || ExecutableImage.isWindowsExecutable(at: url)
             } else if fm.isExecutableFile(atPath: url.path), url.pathExtension.lowercased() != "dylib",
                       ExecutableImage.machOSlices(at: url).contains(where: \.isSupportedMacExecutable) {
-                return .nativeMacOS
+                native = true
             }
         }
+        if native && windows { return .unknown }
+        if native { return .nativeMacOS }
+        return windows ? .windows : .unknown
+    }
+    public func platform(of game: InstalledGame, launchExecutables: [SteamLaunchExecutable]) -> GamePlatform {
+        let root = game.installURL.resolvingSymlinksInPath().standardizedFileURL
+        var native = false, windows = false
+        for launch in launchExecutables {
+            let path = launch.path.replacingOccurrences(of: "\\", with: "/")
+            let components = path.split(separator: "/", omittingEmptySubsequences: false)
+            guard !path.hasPrefix("/"), !path.contains("\0"), !path.contains(":"),
+                  !components.contains(".."), !components.isEmpty else { continue }
+            let executable = root.appendingPathComponent(path).resolvingSymlinksInPath().standardizedFileURL
+            guard executable.path.hasPrefix(root.path + "/") else { continue }
+            let allowsMac = launch.platforms.isEmpty || launch.platforms.contains("macos")
+            let allowsWindows = launch.platforms.isEmpty || launch.platforms.contains("windows")
+            if allowsMac {
+                if executable.pathExtension.lowercased() == "app" {
+                    native = native || Self.hasNativeBundleExecutable(executable)
+                } else {
+                    native = native || ExecutableImage.machOSlices(at: executable).contains(where: \.isSupportedMacExecutable)
+                }
+            }
+            if allowsWindows { windows = windows || ExecutableImage.isWindowsExecutable(at: executable) }
+        }
+        if native { return .nativeMacOS }
         return windows ? .windows : .unknown
     }
     private static func hasNativeBundleExecutable(_ url: URL) -> Bool {
@@ -192,14 +218,18 @@ public struct GameRouter: Sendable {
 
     public func plan(appID: Int, override: RoutingMode = .auto, paths: SteamPaths = .detected) -> LaunchPlan {
         let game = detector.findGame(appID: appID, paths: paths)
-        let binaryPlatform = game.map(detector.platform(of:)) ?? .unknown
-        let metadata = binaryPlatform == .unknown && appID > 0 && appID <= Int(UInt32.max)
+        let metadata = appID > 0 && appID <= Int(UInt32.max)
             ? try? SteamAppInfoReader(url: paths.userData.appendingPathComponent("appcache/appinfo.vdf")).read(appID: UInt32(appID)) : nil
+        let targetedPlatform = game.map { detector.platform(of: $0, launchExecutables: metadata?.launchExecutables ?? []) } ?? .unknown
         let metadataPlatform: GamePlatform
         if let metadata, metadata.platforms.contains("macos"), metadata.supportsMacOS64Bit == true { metadataPlatform = .nativeMacOS }
         else if let metadata, metadata.platforms.contains("windows"), !metadata.platforms.contains("macos") || metadata.supportsMacOS64Bit == false { metadataPlatform = .windows }
         else { metadataPlatform = .unknown }
-        let platform = binaryPlatform == .unknown ? metadataPlatform : binaryPlatform
+        // Known Steam platform declarations beat unrelated helper files. When
+        // declarations are ambiguous, inspect the declared launch executables.
+        let scanAllowed = metadata.map { $0.platforms.isEmpty && $0.launchExecutables.isEmpty } ?? true
+        let scannedPlatform = scanAllowed ? (game.map(detector.platform(of:)) ?? .unknown) : .unknown
+        let platform = metadataPlatform != .unknown ? metadataPlatform : (targetedPlatform != .unknown ? targetedPlatform : scannedPlatform)
         switch override {
         case .native:
             return LaunchPlan(appID: appID, platform: platform, mode: .native, useNotProton: false,
@@ -210,11 +240,11 @@ public struct GameRouter: Sendable {
         case .auto:
             if platform == .nativeMacOS {
                 return LaunchPlan(appID: appID, platform: platform, mode: .native, useNotProton: false,
-                                  explanation: binaryPlatform == .nativeMacOS ? "Se detectó un binario Mach-O o un bundle .app macOS." : "Steam declara un lanzador macOS de 64 bits.")
+                                  explanation: metadataPlatform == .nativeMacOS ? "Steam declara un lanzador macOS de 64 bits." : "Se detectó un ejecutable macOS compatible.")
             }
             if platform == .windows {
                 return LaunchPlan(appID: appID, platform: platform, mode: .crossover, useNotProton: true,
-                                  explanation: binaryPlatform == .windows ? "Se detectó un ejecutable Windows; NotProton/CrossOver será la ruta." : "Los metadatos de Steam indican Windows sin una ruta macOS de 64 bits confirmada.")
+                                  explanation: metadataPlatform == .windows ? "Los metadatos de Steam indican Windows sin una ruta macOS de 64 bits confirmada." : "Se detectó un ejecutable Windows; NotProton/CrossOver será la ruta.")
             }
             return LaunchPlan(appID: appID, platform: .unknown, mode: .auto, useNotProton: false,
                               explanation: "No se pudo determinar una ruta compatible; elige --mode native o --mode crossover.")

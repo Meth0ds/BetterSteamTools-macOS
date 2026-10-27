@@ -3,12 +3,17 @@ import CryptoKit
 import Darwin
 
 public enum SteamAppInfoError: Error, Equatable { case malformed, unsupportedVersion, tooLarge, changed }
+public struct SteamLaunchExecutable: Sendable, Equatable {
+    public let path: String
+    public let platforms: Set<String>
+}
 public struct SteamAppMetadata: Sendable, Equatable {
     public let appID: UInt32
     public let name: String?
     public let platforms: Set<String>
     /// True/false only when macOS launch entries explicitly declare an architecture.
     public let supportsMacOS64Bit: Bool?
+    public let launchExecutables: [SteamLaunchExecutable]
 }
 
 /// Read-only appinfo v27/v28/v29 reader. The file is never mapped: Steam may
@@ -81,22 +86,29 @@ public struct SteamAppInfoReader: Sendable {
         let config = try app.unique("config")?.object
         let launch = try config?.unique("launch")?.object
         var supported64 = false, supported32 = false, unknownArchitecture = false
+        var launchExecutables: [SteamLaunchExecutable] = []
         for entry in launch?.properties ?? [] {
             guard let child = entry.object else { continue }
             // An auxiliary editor or tool is not evidence that the default game runs on macOS.
             let type = try child.unique("type")?.text?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
             guard type.isEmpty || type == "default" else { continue }
-            guard let launchConfig = try child.unique("config")?.object,
-                  let oslist = try launchConfig.unique("oslist")?.text else { continue }
-            let operatingSystems = oslist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            let launchConfig = try child.unique("config")?.object
+            // A beta- or DLC-specific executable cannot establish the default route.
+            if let beta = try launchConfig?.unique("betakey")?.text, !beta.isEmpty { continue }
+            if let dlc = try launchConfig?.unique("ownsdlc")?.text, !dlc.isEmpty { continue }
+            let oslist = try launchConfig?.unique("oslist")?.text ?? ""
+            let operatingSystems = Set(oslist.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+            if let executable = try child.unique("executable")?.text, !executable.isEmpty {
+                launchExecutables.append(SteamLaunchExecutable(path: executable, platforms: operatingSystems))
+            }
             guard operatingSystems.contains("macos") else { continue }
-            let arch = try launchConfig.unique("osarch")?.text?.lowercased()
+            let arch = try launchConfig?.unique("osarch")?.text?.lowercased()
             if arch == "64" || arch == "x86_64" || arch == "arm64" { supported64 = true }
             else if arch == "32" || arch == "x86" { supported32 = true }
             else { unknownArchitecture = true }
         }
         let mac64: Bool? = supported64 ? true : (supported32 && !unknownArchitecture ? false : nil)
-        return SteamAppMetadata(appID: appID, name: name, platforms: platforms, supportsMacOS64Bit: mac64)
+        return SteamAppMetadata(appID: appID, name: name, platforms: platforms, supportsMacOS64Bit: mac64, launchExecutables: launchExecutables)
     }
 }
 

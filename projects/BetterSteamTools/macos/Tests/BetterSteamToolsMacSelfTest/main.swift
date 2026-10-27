@@ -47,6 +47,19 @@ func testExecutableImages(root: URL) throws {
     try check(ExecutableImage.isWindowsExecutable(at: executable), "PE executable")
     try Data("not an executable".utf8).write(to: executable)
     try check(!ExecutableImage.isWindowsExecutable(at: executable), ".exe extension alone is not proof")
+    let sparse = root.appendingPathComponent("large-macho")
+    try machO().write(to: sparse)
+    let handle = try FileHandle(forWritingTo: sparse)
+    try handle.truncate(atOffset: 4 * 1024 * 1024 * 1024)
+    try handle.close()
+    try check(ExecutableImage.machOSlices(at: sparse).first?.isSupportedMacExecutable == true, "large sparse Mach-O reads bounded headers")
+    let thin = machO()
+    func big(_ value: UInt32) -> Data { var big = value.bigEndian; return withUnsafeBytes(of: &big) { Data($0) } }
+    let universal = big(0xcafebabe) + big(1) + big(0x0100000c) + big(0) + big(28) + big(UInt32(thin.count)) + big(0) + thin
+    try universal.write(to: sparse)
+    try check(ExecutableImage.machOSlices(at: sparse) == ExecutableImage.machOSlices(universal), "file and in-memory universal Mach-O agree")
+    try universal.dropLast().write(to: sparse)
+    try check(ExecutableImage.machOSlices(at: sparse).isEmpty, "truncated universal slice rejected")
 }
 func testRouting(root: URL) throws {
     let paths = SteamPaths(steamApp: root.appendingPathComponent("Steam.app"), userData: root)
