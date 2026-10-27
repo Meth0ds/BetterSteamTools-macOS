@@ -258,6 +258,11 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
 
 @main struct SelfTest {
     static func main() async {
+        if CommandLine.arguments.count == 3, ["--auth-lock-hold", "--auth-lock-crash"].contains(CommandLine.arguments[1]) {
+            do { try await authLockChild(root: URL(fileURLWithPath: CommandLine.arguments[2]), crash: CommandLine.arguments[1] == "--auth-lock-crash") }
+            catch { fputs("auth lock child failed: \(error)\n", stderr); exit(1) }
+            return
+        }
         if CommandLine.arguments.count == 4, CommandLine.arguments[1] == "--removal-crash", let point = Int(CommandLine.arguments[3]) {
             do { try removalChild(root: URL(fileURLWithPath: CommandLine.arguments[2]), stop: point) }
             catch { fputs("removal child failed: \(error)\n", stderr); exit(1) }
@@ -293,6 +298,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             defer { try? FileManager.default.removeItem(at: root) }
             try testParser()
             try await testAuthentication()
+            try await testAccountFileLock(root: root)
             try testInstalledLuaInventory(root: root)
             try testPluginAssets(root: root)
             try testPluginInstaller(root: root)

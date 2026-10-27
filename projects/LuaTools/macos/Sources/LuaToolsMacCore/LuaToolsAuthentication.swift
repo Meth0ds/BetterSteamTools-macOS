@@ -24,6 +24,40 @@ public struct LuaToolsAccount: Sendable, Equatable {
 @_spi(Testing) public protocol LuaToolsCredentialStore: Sendable {
     func read() throws -> Data?
     func compareExchange(expected: Data?, desired: Data) throws -> Bool
+    func acquireRefreshLock() async throws -> any LuaToolsRefreshLease
+}
+@_spi(Testing) public protocol LuaToolsRefreshLease: Sendable { func release() }
+
+private final class FileRefreshLease: LuaToolsRefreshLease, @unchecked Sendable {
+    private let lock = NSLock(); private var descriptor: Int32
+    init(_ descriptor: Int32) { self.descriptor = descriptor }
+    func release() { lock.lock(); defer { lock.unlock() }; if descriptor >= 0 { flock(descriptor, LOCK_UN); close(descriptor); descriptor = -1 } }
+    deinit { release() }
+}
+
+@_spi(Testing) public struct LuaToolsAccountFileLock: Sendable {
+    private let file: URL
+    public init(file: URL) { self.file = file }
+    fileprivate func openChecked() throws -> Int32 {
+        let fd = open(file.path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600))
+        guard fd >= 0 else { throw LuaToolsError.transactionFailed("No se pudo abrir el bloqueo de la cuenta") }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(), info.st_nlink == 1 else {
+            close(fd); throw LuaToolsError.transactionFailed("Bloqueo de cuenta no seguro")
+        }
+        return fd
+    }
+    public func acquire() async throws -> any LuaToolsRefreshLease {
+        let fd = try openChecked()
+        do {
+            while true {
+                try Task.checkCancellation()
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 { return FileRefreshLease(fd) }
+                guard errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR else { throw LuaToolsError.transactionFailed("No se pudo bloquear la renovación de cuenta") }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+        } catch { close(fd); throw error }
+    }
 }
 
 private struct KeychainCredentialStore: LuaToolsCredentialStore {
@@ -47,20 +81,21 @@ private struct KeychainCredentialStore: LuaToolsCredentialStore {
             guard added == errSecSuccess else { throw LuaToolsAuthenticationError.credentialStore(added) }
         } else if status != errSecSuccess { throw LuaToolsAuthenticationError.credentialStore(status) }
     }
-    func compareExchange(expected: Data?, desired: Data) throws -> Bool {
+    private func lockFile(_ name: String) throws -> URL {
         let folder = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/LuaToolsMac", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let path = folder.appendingPathComponent(".account.lock").path
-        let fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600))
-        guard fd >= 0 else { throw LuaToolsError.transactionFailed("No se pudo abrir el bloqueo de la cuenta") }
-        defer { close(fd) }
-        var info = stat()
-        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(), info.st_nlink == 1,
-              flock(fd, LOCK_EX) == 0 else { throw LuaToolsError.transactionFailed("Bloqueo de cuenta no seguro") }
+        return folder.appendingPathComponent(name)
+    }
+    func compareExchange(expected: Data?, desired: Data) throws -> Bool {
+        let fd = try LuaToolsAccountFileLock(file: lockFile(".account.lock")).openChecked(); defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { throw LuaToolsError.transactionFailed("No se pudo bloquear la cuenta") }
         defer { flock(fd, LOCK_UN) }
         guard try read() == expected else { return false }
         try write(desired)
         return true
+    }
+    func acquireRefreshLock() async throws -> any LuaToolsRefreshLease {
+        try await LuaToolsAccountFileLock(file: lockFile(".account-refresh.lock")).acquire()
     }
 }
 
@@ -71,6 +106,7 @@ public actor LuaToolsAuthentication {
     private struct Stored: Codable, Sendable {
         let accessToken: String; let refreshToken: String; let expiresAt: Date
         let email: String?; let displayName: String?
+        let sessionID: UUID?
     }
     private struct Record: Codable { let revision: UUID; let session: Stored? }
     private struct Response: Decodable {
@@ -113,26 +149,30 @@ public actor LuaToolsAuthentication {
         let verified = try await Self.request(transport, url: "https://db.lua.tools/auth/v1/verify", body: ["type": "magiclink", "token_hash": redeemed.token], apiKey: true)
         let session = try Self.decode(verified, previous: nil)
         guard generation == epoch else { throw LuaToolsAuthenticationError.sessionChanged }
-        guard try store.compareExchange(expected: original, desired: encode(session)) else { throw LuaToolsAuthenticationError.sessionChanged }
+        guard try store.compareExchange(expected: original, desired: Self.encode(session)) else { throw LuaToolsAuthenticationError.sessionChanged }
         return LuaToolsAccount(email: session.email, displayName: session.displayName)
     }
     public func accessToken() async throws -> String {
         let snapshot = try load()
         guard let stored = snapshot.session else { throw LuaToolsAuthenticationError.signedOut }
         if stored.expiresAt > Date().addingTimeInterval(120) { return stored.accessToken }
-        let epoch = generation, transport = self.transport
+        let epoch = generation, transport = self.transport, store = self.store
         let task = refresh ?? Task<Stored, Error> {
-            let bytes = try await Self.request(transport, url: "https://db.lua.tools/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": stored.refreshToken], apiKey: true)
-            return try Self.decode(bytes, previous: stored)
+            let lease = try await store.acquireRefreshLock(); defer { lease.release() }
+            let current = try Self.load(store)
+            guard let candidate = current.session,
+                  (stored.sessionID != nil && stored.sessionID == candidate.sessionID) || stored.refreshToken == candidate.refreshToken else { throw LuaToolsAuthenticationError.sessionChanged }
+            if candidate.expiresAt > Date().addingTimeInterval(120) { return candidate }
+            let bytes = try await Self.request(transport, url: "https://db.lua.tools/auth/v1/token?grant_type=refresh_token", body: ["refresh_token": candidate.refreshToken], apiKey: true)
+            let updated = try Self.decode(bytes, previous: candidate)
+            try Task.checkCancellation()
+            guard try store.compareExchange(expected: current.raw, desired: Self.encode(updated)) else { throw LuaToolsAuthenticationError.sessionChanged }
+            return updated
         }
         refresh = task
         do {
             let updated = try await task.value
             guard generation == epoch else { throw LuaToolsAuthenticationError.sessionChanged }
-            if try !store.compareExchange(expected: snapshot.raw, desired: encode(updated)) {
-                let current = try load().session
-                guard let current, current.accessToken == updated.accessToken && current.refreshToken == updated.refreshToken else { throw LuaToolsAuthenticationError.sessionChanged }
-            }
             refresh = nil
             return updated.accessToken
         } catch { if generation == epoch { refresh = nil }; throw error }
@@ -141,12 +181,13 @@ public actor LuaToolsAuthentication {
         generation &+= 1; refresh?.cancel(); refresh = nil
         for _ in 0..<10 {
             let current = try load().raw
-            if try store.compareExchange(expected: current, desired: encode(nil)) { return }
+            if try store.compareExchange(expected: current, desired: Self.encode(nil)) { return }
         }
         throw LuaToolsAuthenticationError.sessionChanged
     }
 
-    private func load() throws -> (raw: Data?, session: Stored?) {
+    private func load() throws -> (raw: Data?, session: Stored?) { try Self.load(store) }
+    private static func load(_ store: any LuaToolsCredentialStore) throws -> (raw: Data?, session: Stored?) {
         guard let data = try store.read() else { return (nil, nil) }
         guard data.count <= 65_536 else { throw LuaToolsAuthenticationError.invalidResponse }
         let decoder = JSONDecoder()
@@ -157,14 +198,15 @@ public actor LuaToolsAuthentication {
         if let session, session.accessToken.isEmpty || session.refreshToken.isEmpty { throw LuaToolsAuthenticationError.invalidResponse }
         return (data, session)
     }
-    private func encode(_ session: Stored?) throws -> Data { try JSONEncoder().encode(Record(revision: UUID(), session: session)) }
+    private static func encode(_ session: Stored?) throws -> Data { try JSONEncoder().encode(Record(revision: UUID(), session: session)) }
     private static func decode(_ data: Data, previous: Stored?) throws -> Stored {
         guard let result = try? JSONDecoder().decode(Response.self, from: data), !result.access_token.isEmpty, !result.refresh_token.isEmpty,
               result.access_token.utf8.count <= 16_384, result.refresh_token.utf8.count <= 16_384,
               result.expires_in > 0, result.expires_in <= 31_536_000 else { throw LuaToolsAuthenticationError.invalidResponse }
         let metadata = result.user?.user_metadata
         return Stored(accessToken: result.access_token, refreshToken: result.refresh_token, expiresAt: Date().addingTimeInterval(TimeInterval(result.expires_in)),
-                      email: result.user?.email ?? previous?.email, displayName: metadata?.custom_claims?.global_name ?? metadata?.full_name ?? metadata?.name ?? result.user?.email ?? previous?.displayName)
+                      email: result.user?.email ?? previous?.email, displayName: metadata?.custom_claims?.global_name ?? metadata?.full_name ?? metadata?.name ?? result.user?.email ?? previous?.displayName,
+                      sessionID: previous?.sessionID ?? UUID())
     }
     private static func request(_ transport: Transport, url: String, body: [String: String], apiKey: Bool) async throws -> Data {
         var request = URLRequest(url: URL(string: url)!)
