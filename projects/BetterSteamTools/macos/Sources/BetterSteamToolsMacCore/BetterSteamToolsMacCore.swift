@@ -192,7 +192,14 @@ public struct GameRouter: Sendable {
 
     public func plan(appID: Int, override: RoutingMode = .auto, paths: SteamPaths = .detected) -> LaunchPlan {
         let game = detector.findGame(appID: appID, paths: paths)
-        let platform = game.map(detector.platform(of:)) ?? .unknown
+        let binaryPlatform = game.map(detector.platform(of:)) ?? .unknown
+        let metadata = binaryPlatform == .unknown && appID > 0 && appID <= Int(UInt32.max)
+            ? try? SteamAppInfoReader(url: paths.userData.appendingPathComponent("appcache/appinfo.vdf")).read(appID: UInt32(appID)) : nil
+        let metadataPlatform: GamePlatform
+        if let metadata, metadata.platforms.contains("macos"), metadata.supportsMacOS64Bit == true { metadataPlatform = .nativeMacOS }
+        else if let metadata, metadata.platforms.contains("windows"), !metadata.platforms.contains("macos") || metadata.supportsMacOS64Bit == false { metadataPlatform = .windows }
+        else { metadataPlatform = .unknown }
+        let platform = binaryPlatform == .unknown ? metadataPlatform : binaryPlatform
         switch override {
         case .native:
             return LaunchPlan(appID: appID, platform: platform, mode: .native, useNotProton: false,
@@ -203,14 +210,14 @@ public struct GameRouter: Sendable {
         case .auto:
             if platform == .nativeMacOS {
                 return LaunchPlan(appID: appID, platform: platform, mode: .native, useNotProton: false,
-                                  explanation: "Se detectó un binario Mach-O o un bundle .app macOS.")
+                                  explanation: binaryPlatform == .nativeMacOS ? "Se detectó un binario Mach-O o un bundle .app macOS." : "Steam declara un lanzador macOS de 64 bits.")
             }
             if platform == .windows {
                 return LaunchPlan(appID: appID, platform: platform, mode: .crossover, useNotProton: true,
-                                  explanation: "Se detectó un ejecutable Windows; NotProton/CrossOver será la ruta.")
+                                  explanation: binaryPlatform == .windows ? "Se detectó un ejecutable Windows; NotProton/CrossOver será la ruta." : "Los metadatos de Steam indican Windows sin una ruta macOS de 64 bits confirmada.")
             }
             return LaunchPlan(appID: appID, platform: .unknown, mode: .auto, useNotProton: false,
-                              explanation: "No se pudo determinar la plataforma; elige --mode native o --mode crossover.")
+                              explanation: "No se pudo determinar una ruta compatible; elige --mode native o --mode crossover.")
         }
     }
 

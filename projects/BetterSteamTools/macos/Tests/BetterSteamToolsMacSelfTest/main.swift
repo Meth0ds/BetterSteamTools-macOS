@@ -249,6 +249,7 @@ do {
     try testKeyValues()
     try testExecutableImages(root: root)
     try testRouting(root: root)
+    try testSteamAppInfo(root: root)
     try testSignedManifest(root: root)
     try testInstaller(root: root)
     try testCompatibilityMapping(root: root)

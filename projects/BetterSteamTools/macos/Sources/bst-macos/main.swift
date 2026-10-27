@@ -29,6 +29,13 @@ struct BSTMacCLI {
             print("Steam: \(paths.steamApp.path)")
             print("NotProton: \(status.message)")
             print("Runners: \(status.runnerDirectories.map(\.lastPathComponent).joined(separator: ", "))")
+        case "appinfo":
+            guard let raw = args.dropFirst().first, let appID = UInt32(raw), appID > 0 else { throw RouterError.unknownPlatform(0) }
+            let file = paths.userData.appendingPathComponent("appcache/appinfo.vdf")
+            if let metadata = try SteamAppInfoReader(url: file).read(appID: appID) {
+                let mac64 = metadata.supportsMacOS64Bit.map { $0 ? "yes" : "no" } ?? "unknown"
+                print("appid=\(appID) name=\(metadata.name ?? "") platforms=\(metadata.platforms.sorted().joined(separator: ",")) mac64=\(mac64)")
+            } else { print("appid=\(appID) no metadata cached") }
         case "validate-build":
             guard let manifestPath = parseValue(args, key: "--manifest") else { throw BundleError.invalidManifest }
             let manifest = try SteamBuildManifest.load(from: URL(fileURLWithPath: manifestPath))
@@ -72,6 +79,6 @@ struct BSTMacCLI {
         return args[args.index(after: index)]
     }
     private static func usage() {
-        print("Uso: bst-macos doctor | validate-build --manifest <path> | plan <appid> [--mode auto|native|crossover] | launch <appid> [--mode ...] [--dry-run] | install --dylib <path> --manifest <signed.json> | uninstall | recover")
+        print("Uso: bst-macos doctor | appinfo <appid> | validate-build --manifest <path> | plan <appid> [--mode auto|native|crossover] | launch <appid> [--mode ...] [--dry-run] | install --dylib <path> --manifest <signed.json> | uninstall | recover")
     }
 }
