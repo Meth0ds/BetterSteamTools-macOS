@@ -57,6 +57,8 @@ public struct DepotManifest: Sendable, Equatable {
     public let manifestGID: UInt64
     public let bytes: Data
     public let sourceName: String
+    public let filenamesEncrypted: Bool
+    public let sizeOnDisk: UInt64
     public var fileName: String { "\(depotID)_\(manifestGID).manifest" }
     public init(fileName: String, bytes: Data) throws {
         let name = URL(fileURLWithPath: fileName).lastPathComponent
@@ -67,11 +69,13 @@ public struct DepotManifest: Sendable, Equatable {
               let gidRange = Range(match.range(at: 2), in: name),
               let depot = UInt64(name[depotRange]), depot > 0, depot <= UInt64(UInt32.max),
               let gid = UInt64(name[gidRange]), gid > 0,
-              bytes.count >= 16, bytes.count <= 64 * 1024 * 1024,
-              bytes.prefix(4).elementsEqual([0xD0, 0x17, 0xF6, 0x71]), bytes.suffix(4).elementsEqual([0xAB, 0x15, 0xC4, 0x32]) else {
+              bytes.count >= 16, bytes.count <= 64 * 1024 * 1024 else {
             throw LuaToolsError.invalidManifest
         }
+        let metadata = try SteamManifestReader.read(bytes)
+        guard metadata.depotID == UInt32(depot), metadata.gid == gid else { throw LuaToolsError.invalidManifest }
         self.depotID = UInt32(depot); self.manifestGID = gid; self.bytes = bytes; self.sourceName = name
+        self.filenamesEncrypted = metadata.filenamesEncrypted; self.sizeOnDisk = metadata.sizeOnDisk
     }
 }
 
@@ -94,27 +98,21 @@ public final class LuaInstaller: @unchecked Sendable {
     public func installZip(appID: Int, zip: URL) throws -> LuaInstallResult {
         lock.lock(); defer { lock.unlock() }
         guard appID > 0, appID <= Int(UInt32.max), try regularFile(zip), zip.pathExtension.lowercased() == "zip" else { throw LuaToolsError.invalidRequest }
-        guard let archiveSize = try zip.resourceValues(forKeys: [.fileSizeKey]).fileSize, archiveSize <= 256 * 1024 * 1024 else { throw LuaToolsError.archiveTooLarge }
-        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("luatools-\(UUID().uuidString)")
-        let extraction = root.appendingPathComponent("extracted", isDirectory: true)
-        try FileManager.default.createDirectory(at: extraction, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let listing = try Shell.run("/usr/bin/unzip", ["-Z1", zip.path])
-        try validateArchiveListing(listing)
-        try Shell.run("/usr/bin/unzip", ["-q", "-o", zip.path, "-d", extraction.path])
-        try validateExtractedTree(extraction)
-        let files = try regularFiles(in: extraction)
-        let luaFiles = files.filter { $0.pathExtension.lowercased() == "lua" }
-        let lua: URL
+        let archive = try ZipArchiveReader(data: boundedData(zip, maximum: 256 * 1024 * 1024)).entries()
+        let luaFiles = archive.filter { URL(fileURLWithPath: $0.path).pathExtension.lowercased() == "lua" }
+        let lua: ZipArchiveReader.Entry
         if luaFiles.count == 1 { lua = luaFiles[0] }
-        else if let exact = luaFiles.first(where: { $0.deletingPathExtension().lastPathComponent == "\(appID)" }) { lua = exact }
-        else { throw LuaToolsError.missingLua }
-        let luaData = try boundedData(lua, maximum: 16 * 1024 * 1024)
-        guard String(data: luaData, encoding: .utf8) != nil else { throw LuaToolsError.invalidRequest }
+        else {
+            let exact = luaFiles.filter { URL(fileURLWithPath: $0.path).deletingPathExtension().lastPathComponent == "\(appID)" }
+            guard exact.count == 1 else { throw exact.isEmpty ? LuaToolsError.missingLua : LuaToolsError.archiveConflict }
+            lua = exact[0]
+        }
+        let luaData = lua.data
+        guard luaData.count <= 16 * 1024 * 1024, String(data: luaData, encoding: .utf8) != nil else { throw LuaToolsError.invalidRequest }
         var manifests: [DepotManifest] = []
         var names: Set<String> = []
-        for file in files where file.pathExtension.lowercased() == "manifest" {
-            let item = try DepotManifest(fileName: file.lastPathComponent, bytes: boundedData(file, maximum: 64 * 1024 * 1024))
+        for file in archive where URL(fileURLWithPath: file.path).pathExtension.lowercased() == "manifest" {
+            let item = try DepotManifest(fileName: URL(fileURLWithPath: file.path).lastPathComponent, bytes: file.data)
             guard names.insert(item.fileName).inserted else { throw LuaToolsError.archiveConflict }
             manifests.append(item)
         }
@@ -185,32 +183,6 @@ public final class LuaInstaller: @unchecked Sendable {
             cursor.deleteLastPathComponent()
         }
         return true
-    }
-    private func validateArchiveListing(_ listing: String) throws {
-        var total = 0
-        for raw in listing.split(whereSeparator: \.isNewline) {
-            let item = String(raw).replacingOccurrences(of: "\\", with: "/")
-            guard !item.isEmpty, item.utf8.count <= 512, !item.hasPrefix("/"), !item.split(separator: "/").contains(".."), !item.contains("\0") else { throw LuaToolsError.unsafeArchive }
-            total += item.utf8.count
-            guard total <= 1_048_576 else { throw LuaToolsError.archiveTooLarge }
-        }
-    }
-    private func validateExtractedTree(_ root: URL) throws {
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isSymbolicLinkKey]) else { throw LuaToolsError.unsafeArchive }
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isSymbolicLinkKey])
-            guard values.isSymbolicLink != true else { throw LuaToolsError.unsafeArchive }
-        }
-    }
-    private func regularFiles(in root: URL) throws -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { throw LuaToolsError.unsafeArchive }
-        var result: [URL] = []
-        for case let url as URL in enumerator {
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true { throw LuaToolsError.unsafeArchive }
-            if values.isRegularFile == true { result.append(url) }
-        }
-        return result
     }
 }
 

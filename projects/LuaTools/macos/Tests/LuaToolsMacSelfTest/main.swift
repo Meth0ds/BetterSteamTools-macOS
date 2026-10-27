@@ -60,15 +60,72 @@ func testInstallerAndRoutes(root: URL) throws -> LuaInstaller {
     try installer.removeLua(appID: 42)
     return installer
 }
+func fixtureManifest(depot: UInt32, gid: UInt64, size: UInt64 = 4096) -> Data {
+    func number(_ value: UInt64) -> [UInt8] {
+        var remaining = value, result: [UInt8] = []
+        repeat { var byte = UInt8(remaining & 0x7f); remaining >>= 7; if remaining != 0 { byte |= 0x80 }; result.append(byte) } while remaining != 0
+        return result
+    }
+    func word(_ value: UInt32) -> [UInt8] { (0..<4).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) } }
+    let metadata: [UInt8] = [0x08] + number(UInt64(depot)) + [0x10] + number(gid) + [0x20, 0x01, 0x28] + number(size)
+    return Data(word(0x71f617d0) + word(0) + word(0x1f4812be) + word(UInt32(metadata.count)) + metadata + word(0x32c415ab))
+}
+func zip64Fixture(_ ordinary: Data) throws -> Data {
+    guard let range = ordinary.range(of: Data([0x50, 0x4b, 0x05, 0x06]), options: .backwards) else { throw TestFailure(description: "ZIP end record fixture") }
+    let offset = range.lowerBound
+    func read(_ start: Int, _ width: Int) -> UInt64 {
+        (0..<width).reduce(UInt64(0)) { $0 | UInt64(ordinary[start + $1]) << ($1 * 8) }
+    }
+    func word(_ value: UInt64, _ width: Int) -> Data { Data((0..<width).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }) }
+    let count = read(offset + 10, 2), size = read(offset + 12, 4), directoryOffset = read(offset + 16, 4)
+    var record = Data()
+    let recordFields: [(UInt64, Int)] = [(0x06064b50, 4), (44, 8), (45, 2), (45, 2), (0, 4), (0, 4), (count, 8), (count, 8), (size, 8), (directoryOffset, 8)]
+    for (value, width) in recordFields { record.append(word(value, width)) }
+    var locator = Data()
+    let locatorFields: [(UInt64, Int)] = [(0x07064b50, 4), (0, 4), (UInt64(offset), 8), (1, 4)]
+    for (value, width) in locatorFields { locator.append(word(value, width)) }
+    var end = ordinary.subdata(in: offset..<ordinary.count)
+    end.replaceSubrange(8..<12, with: Data(repeating: 0xff, count: 4))
+    end.replaceSubrange(12..<20, with: Data(repeating: 0xff, count: 8))
+    return ordinary.subdata(in: 0..<offset) + record + locator + end
+}
+func zip64EntryFixture(_ ordinary: Data) throws -> Data {
+    guard let endRange = ordinary.range(of: Data([0x50, 0x4b, 0x05, 0x06]), options: .backwards) else { throw TestFailure(description: "ZIP entry end fixture") }
+    let end = endRange.lowerBound
+    func read(_ start: Int, _ width: Int) -> UInt64 {
+        (0..<width).reduce(UInt64(0)) { $0 | UInt64(ordinary[start + $1]) << ($1 * 8) }
+    }
+    func word(_ value: UInt64, _ width: Int) -> Data { Data((0..<width).map { UInt8(truncatingIfNeeded: value >> ($0 * 8)) }) }
+    let central = Int(read(end + 16, 4)), centralSize = read(end + 12, 4)
+    let nameLength = Int(read(central + 28, 2)), extraLength = Int(read(central + 30, 2))
+    let insert = central + 46 + nameLength + extraLength
+    let compressed = read(central + 20, 4), uncompressed = read(central + 24, 4), localOffset = read(central + 42, 4)
+    let extra = word(1, 2) + word(24, 2) + word(uncompressed, 8) + word(compressed, 8) + word(localOffset, 8)
+    var result = ordinary
+    result.replaceSubrange((central + 20)..<(central + 28), with: Data(repeating: 0xff, count: 8))
+    result.replaceSubrange((central + 42)..<(central + 46), with: Data(repeating: 0xff, count: 4))
+    result.replaceSubrange((central + 30)..<(central + 32), with: word(UInt64(extraLength + extra.count), 2))
+    result.insert(contentsOf: extra, at: insert)
+    result.replaceSubrange((end + extra.count + 12)..<(end + extra.count + 16), with: word(centralSize + UInt64(extra.count), 4))
+    return result
+}
 func testZipPackage(root: URL) throws {
     let steam = root.appendingPathComponent("zip-steam")
     let paths = SteamMacPaths(steamApp: steam.appendingPathComponent("Steam.app"), userData: steam)
     let source = root.appendingPathComponent("package-source", isDirectory: true)
     try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
     try "-- package Lua\naddappid(77)\n".write(to: source.appendingPathComponent("77.lua"), atomically: true, encoding: .utf8)
-    var manifest = Data([0xD0, 0x17, 0xF6, 0x71])
-    manifest.append(Data(repeating: 0x11, count: 8)); manifest.append(Data([0xAB, 0x15, 0xC4, 0x32]))
+    let manifest = fixtureManifest(depot: 123, gid: 456)
     try manifest.write(to: source.appendingPathComponent("123_456.manifest"))
+    let parsed = try DepotManifest(fileName: "123_456.manifest", bytes: manifest)
+    try check(parsed.depotID == 123 && parsed.manifestGID == 456 && parsed.sizeOnDisk == 4096 && parsed.filenamesEncrypted, "manifest metadata matches its filename")
+    var rejectedMismatch = false
+    do { _ = try DepotManifest(fileName: "124_456.manifest", bytes: manifest) } catch { rejectedMismatch = true }
+    try check(rejectedMismatch, "manifest identity must agree with its filename")
+    let wrapped = root.appendingPathComponent("wrapped.zip")
+    try Shell.run("/usr/bin/zip", ["-q", "-j", wrapped.path, source.appendingPathComponent("123_456.manifest").path])
+    let wrappedBytes = try Data(contentsOf: wrapped)
+    try check(DepotManifest(fileName: "123_456.manifest", bytes: wrappedBytes).manifestGID == 456, "ZIP-wrapped Steam manifests are supported")
     let zip = root.appendingPathComponent("package.zip")
     try Shell.run("/usr/bin/zip", ["-q", "-j", zip.path, source.appendingPathComponent("77.lua").path, source.appendingPathComponent("123_456.manifest").path])
     let installer = LuaInstaller(paths: paths)
@@ -86,6 +143,46 @@ func testZipPackage(root: URL) throws {
     do { _ = try installer.installZip(appID: 77, zip: invalidZip) } catch { rejected = true }
     try check(rejected, "invalid depot manifest must rollback")
     try check(String(contentsOf: result.luaURL, encoding: .utf8) == "old", "failed package leaves previous Lua untouched")
+    var traversal = try Data(contentsOf: zip)
+    let oldName = Data("77.lua".utf8), badName = Data("../bad".utf8)
+    var search = traversal.startIndex, replacements = 0
+    while search < traversal.endIndex, let match = traversal.range(of: oldName, in: search..<traversal.endIndex) {
+        traversal.replaceSubrange(match, with: badName); search = match.upperBound; replacements += 1
+    }
+    try check(replacements == 2, "fixture changes both ZIP file-name records")
+    let traversalZip = root.appendingPathComponent("traversal.zip"); try traversal.write(to: traversalZip)
+    rejected = false
+    do { _ = try installer.installZip(appID: 77, zip: traversalZip) } catch { rejected = true }
+    try check(rejected && String(contentsOf: result.luaURL, encoding: .utf8) == "old", "ZIP traversal is rejected before any write")
+    let link = source.appendingPathComponent("link.lua")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source.appendingPathComponent("77.lua"))
+    let linkZip = root.appendingPathComponent("link.zip")
+    try Shell.run("/usr/bin/zip", ["-q", "-j", "-y", linkZip.path, link.path])
+    rejected = false
+    do { _ = try installer.installZip(appID: 77, zip: linkZip) } catch { rejected = true }
+    try check(rejected && String(contentsOf: result.luaURL, encoding: .utf8) == "old", "ZIP symlinks are rejected before any write")
+    let largeLua = source.appendingPathComponent("78.lua")
+    let largeContent = "-- " + String(repeating: "compressed fixture ", count: 10000) + "\naddappid(78)\n"
+    try largeContent.write(to: largeLua, atomically: true, encoding: .utf8)
+    let compressedZip = root.appendingPathComponent("compressed.zip")
+    try Shell.run("/usr/bin/zip", ["-q", "-j", compressedZip.path, largeLua.path])
+    let compressedResult = try installer.installZip(appID: 78, zip: compressedZip)
+    try check(String(contentsOf: compressedResult.luaURL, encoding: .utf8) == largeContent, "deflated ZIP payload is installed byte-for-byte")
+    let zip64 = root.appendingPathComponent("zip64.zip")
+    try zip64Fixture(Data(contentsOf: compressedZip)).write(to: zip64)
+    let zip64Result = try installer.installZip(appID: 79, zip: zip64)
+    try check(String(contentsOf: zip64Result.luaURL, encoding: .utf8) == largeContent, "ZIP64 end records preserve valid package contents")
+    let zip64Entry = root.appendingPathComponent("zip64-entry.zip")
+    try zip64Fixture(zip64EntryFixture(Data(contentsOf: compressedZip))).write(to: zip64Entry)
+    let zip64EntryResult = try installer.installZip(appID: 80, zip: zip64Entry)
+    try check(String(contentsOf: zip64EntryResult.luaURL, encoding: .utf8) == largeContent, "ZIP64 entry sizes and offsets are honored")
+    var corrupt = try Data(contentsOf: compressedZip)
+    guard let central = corrupt.range(of: Data([0x50, 0x4b, 0x01, 0x02])) else { throw TestFailure(description: "ZIP central directory fixture") }
+    corrupt[central.lowerBound + 16] ^= 0x80
+    let corruptZip = root.appendingPathComponent("corrupt.zip"); try corrupt.write(to: corruptZip)
+    rejected = false
+    do { _ = try installer.installZip(appID: 78, zip: corruptZip) } catch { rejected = true }
+    try check(rejected && String(contentsOf: compressedResult.luaURL, encoding: .utf8) == largeContent, "CRC mismatch rejects the archive before replacing Lua")
 }
 func fragmentedTCP(port: UInt16) async throws -> Data {
     try await withCheckedThrowingContinuation { continuation in
