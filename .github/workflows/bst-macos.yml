@@ -52,7 +52,7 @@ jobs:
       - name: Configure
         run: cmake -S src -B build-macos -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build bootstrap dylib
-        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest bst-lua-configuration-selftest
+        run: cmake --build build-macos --target BetterSteamToolsMac bst-platform-selftest bst-detour-selftest bst-macho-layout-selftest bst-lua-configuration-selftest bst-configstore-selftest bst-manifest-hook-selftest
       - name: Test ARM64 anchor analysis
         run: python3 -m unittest discover -s tools/macos -p "test_*.py"
       - name: Test native platform backend

@@ -6,8 +6,10 @@
 #include "OSTPlatform/include/SteamCredentialStore.h"
 #include "macos/MacLuaSupport.h"
 #include "macos/MacConfiguration.h"
+#include "macos/MacConfigStore.h"
 #include <Security/Security.h>
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -20,6 +22,34 @@
 namespace fs = std::filesystem;
 using Status = OSTPlatform::SteamCredentialStore::Status;
 namespace Store = OSTPlatform::SteamCredentialStore;
+void check(bool value, const char* message);
+static int fallbackCalls = 0;
+static int32_t configStoreFixtureOriginal(void*, uint32_t, const char*, void*, uint32_t) { ++fallbackCalls; return 17; }
+static void testConfigStoreHook() {
+    using Function = int32_t (*)(void*, uint32_t, const char*, void*, uint32_t);
+    const auto hook = reinterpret_cast<Function>(BST::Mac::ConfigStoreReplacement());
+    auto** slot = BST::Mac::ConfigStoreOriginalSlot();
+    const auto before = *slot;
+    *slot = reinterpret_cast<void*>(configStoreFixtureOriginal);
+    struct Restore { void** slot; void* before; ~Restore() { *slot = before; } } restore{slot, before};
+    std::array<uint8_t, 64> output; output.fill(0x55);
+    check(hook(reinterpret_cast<void*>(1), 1, "Software\\Valve\\Steam\\Depots\\301\\DecryptionKey", output.data(), output.size()) == 32,
+          "native ConfigStore replacement supplies the real Lua-configured key");
+    check(std::all_of(output.begin(), output.begin() + 32, [](uint8_t byte) { return byte == 0xcd; }) &&
+          std::all_of(output.begin() + 32, output.end(), [](uint8_t byte) { return byte == 0x55; }), "only the 32 key bytes are written");
+    output.fill(0x55); fallbackCalls = 0;
+    check(hook(reinterpret_cast<void*>(1), 1, "Software\\Valve\\Steam\\Depots\\301\\DecryptionKey", output.data(), 31) == 17 && fallbackCalls == 1,
+          "short output buffer preserves the original call");
+    check(std::all_of(output.begin(), output.end(), [](uint8_t byte) { return byte == 0x55; }), "short buffer has no partial override");
+    check(hook(reinterpret_cast<void*>(1), 1, "Software\\Valve\\Steam\\Depots\\302\\DecryptionKey", output.data(), 64) == 17 && fallbackCalls == 2,
+          "unmanaged depot uses the original call");
+    check(hook(reinterpret_cast<void*>(1), 1, "apptickets\\301", output.data(), 64) == 17 && fallbackCalls == 3,
+          "ticket reads are not mistaken for depot keys");
+    check(hook(reinterpret_cast<void*>(1), 0, "Software\\Valve\\Steam\\Depots\\301\\DecryptionKey", output.data(), 64) == 17 && fallbackCalls == 4,
+          "a different ConfigStore selector uses the original call");
+    check(hook(reinterpret_cast<void*>(1), 1, "Other\\301\\DecryptionKey", output.data(), 64) == 17 && fallbackCalls == 5,
+          "a different ConfigStore namespace uses the original call");
+}
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void write(const fs::path& path, const std::string& text) {
     std::ofstream output(path, std::ios::binary); output << text; output.close();
@@ -165,9 +195,10 @@ void testNativeReload(Vault& vault) {
     write(script, "addappid(201)\nerror('fixture invalid configuration')\n");
     report = configuration.reload(steam);
     check(!report.ready && !report.diagnostics.empty() && !BST::Mac::HasConfiguredDepot(201), "partial/error configuration cannot affect ownership hooks");
-    write(script, "addappid(301)\n");
+    write(script, "addappid(301, 1, string.rep('cd', 32))\n");
     report = configuration.reload(steam);
     check(report.ready && BST::Mac::HasConfiguredDepot(301), "corrected configuration resumes without restarting the registry");
+    testConfigStoreHook();
     std::promise<void> entered, leave;
     const auto leaveSignal = leave.get_future().share();
     std::thread worker([&] { std::lock_guard lock(BST::Mac::ConfigurationMutex()); entered.set_value(); leaveSignal.wait(); });

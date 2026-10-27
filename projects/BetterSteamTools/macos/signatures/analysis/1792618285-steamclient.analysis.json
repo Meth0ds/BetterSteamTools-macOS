@@ -24,7 +24,21 @@
           "anchorRVA": "0x1589830"
         }
       ],
-      "uniqueFunctionCandidate": true
+      "uniqueFunctionCandidate": true,
+      "entryBytes": "fc6fbaa9fa6701a9f85f02a9f65703a9f44f04a9fd7b05a9fd430191ffc308d1",
+      "abi": {
+        "return": "bool in w0",
+        "arguments": [
+          "x0 = user app manager",
+          "w1 = AppID",
+          "x2 = user config",
+          "x3 = CUtlVector<DepotEntry>*",
+          "x4 = shared depot vector",
+          "x5 = Steam app",
+          "x6 = build ID output",
+          "x7 = beta fallback output"
+        ]
+      }
     },
     {
       "anchor": "CWebSocketConnection::BBuildAndAsyncSendFrame",
@@ -60,6 +74,8 @@
     "ARM64 calling convention and argument types",
     "object field layout and sizes",
     "coexistence with NotProton trampolines",
-    "runtime Steam and game integration"
+    "runtime Steam and game integration",
+    "live BuildDepotDependency invocation with native CUtlVector and DepotEntry objects",
+    "manifest override download and depotcache integration"
   ]
 }

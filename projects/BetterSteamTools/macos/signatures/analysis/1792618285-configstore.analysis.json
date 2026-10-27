@@ -1,0 +1,45 @@
+{
+  "format": "analysis-only",
+  "runtimeApproved": false,
+  "class": "CConfigStore",
+  "vtableRVA": "0x1744e48",
+  "methods": [
+    {
+      "name": "GetBinary",
+      "slot": 6,
+      "functionRVA": "0x6b8210",
+      "entryBytes": "f85fbca9f65701a9f44f02a9fd7b03a9fdc30091f30304aaf40303aaf50302aa"
+    },
+    {
+      "name": "SetBinary",
+      "slot": 14,
+      "functionRVA": "0x6b94d8",
+      "entryBytes": "ff4301d1f85f01a9f65702a9f44f03a9fd7b04a9fd030191f70304aaf60303aa"
+    }
+  ],
+  "steamBuild": "1792618285",
+  "module": "steamclient.dylib",
+  "sha256": "b9d62be2ac64b77dc77e1d19eefcf3880df99495c7db85b30623095310b6a6bd",
+  "evidence": {
+    "rttiName": "12CConfigStore",
+    "rttiClass": "libc++abi class_type_info",
+    "uniquePrimaryVtable": true,
+    "depotReadCallSiteRVA": "0xa6e41c",
+    "depotWriteCallSiteRVA": "0xa6e4e8",
+    "readVirtualCallOffset": "0x30",
+    "writeVirtualCallOffset": "0x70",
+    "abiArguments": [
+      "x0 = CConfigStore object",
+      "x1 = config store selector",
+      "x2 = key name",
+      "x3 = output buffer",
+      "x4 = capacity"
+    ],
+    "return": "int32 byte length in w0",
+    "validationRequired": [
+      "live Steam invocation and output layout",
+      "NotProton coexistence",
+      "real depot download with configured key"
+    ]
+  }
+}

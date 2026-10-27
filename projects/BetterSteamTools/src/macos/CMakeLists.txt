@@ -6,7 +6,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 include(Tomlplusplus)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LuaCore.cmake")
 add_library(BSTConfiguration STATIC
-    MacLuaSupport.cpp MacConfiguration.cpp
+    MacLuaSupport.cpp MacConfiguration.cpp MacConfigStore.cpp
     ../Utils/Config/LuaConfig.cpp ../Utils/Config/Config.cpp
     ../Utils/SteamMetadata/StatsClient.cpp ../Utils/SteamMetadata/ManifestClient.cpp
     ../Utils/Tickets/AppTicketStorage.cpp)
@@ -31,7 +31,7 @@ add_library(BSTSteamClientProbe STATIC MachOImageLayout.cpp SteamClientProbe.cpp
 target_include_directories(BSTSteamClientProbe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(BSTSteamClientProbe PUBLIC OSTPlatformMac)
 
-add_library(BetterSteamToolsMac SHARED BetterSteamToolsMac.mm MacHookRuntime.cpp)
+add_library(BetterSteamToolsMac SHARED BetterSteamToolsMac.mm MacHookRuntime.cpp MacManifestHook.cpp)
 set_target_properties(BetterSteamToolsMac PROPERTIES
     OUTPUT_NAME "BetterSteamTools"
     PREFIX ""
@@ -56,6 +56,13 @@ if(BUILD_TESTING)
     target_link_libraries(bst-lua-configuration-selftest PRIVATE BSTConfiguration)
     add_test(NAME bst-lua-configuration-selftest COMMAND bst-lua-configuration-selftest)
     set_tests_properties(bst-lua-configuration-selftest PROPERTIES TIMEOUT 30)
+    add_executable(bst-configstore-selftest tests/ConfigStoreSelfTest.cpp)
+    target_link_libraries(bst-configstore-selftest PRIVATE BSTConfiguration)
+    add_test(NAME bst-configstore-selftest COMMAND bst-configstore-selftest)
+    add_executable(bst-manifest-hook-selftest tests/ManifestHookSelfTest.cpp MacManifestHook.cpp)
+    target_include_directories(bst-manifest-hook-selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_link_libraries(bst-manifest-hook-selftest PRIVATE BSTConfiguration)
+    add_test(NAME bst-manifest-hook-selftest COMMAND bst-manifest-hook-selftest)
     add_executable(bst-platform-selftest tests/PlatformSelfTest.mm)
     set_target_properties(bst-platform-selftest PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED YES)
     target_link_libraries(bst-platform-selftest PRIVATE OSTPlatformMac)
@@ -69,4 +76,7 @@ if(BUILD_TESTING)
     add_executable(bst-real-hook-smoke tests/RealHookSmoke.cpp)
     target_include_directories(bst-real-hook-smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
     target_link_libraries(bst-real-hook-smoke PRIVATE BSTSteamClientProbe)
+    add_executable(bst-steam-rtti-probe tests/SteamRTTIProbe.cpp)
+    target_include_directories(bst-steam-rtti-probe PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+    target_link_libraries(bst-steam-rtti-probe PRIVATE BSTSteamClientProbe)
 endif()

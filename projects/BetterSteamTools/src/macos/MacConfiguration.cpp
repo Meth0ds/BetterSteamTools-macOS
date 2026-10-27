@@ -11,7 +11,7 @@ namespace BST::Mac {
 namespace {
 std::recursive_mutex mutex;
 bool ready = false;
-using DepotSnapshot = std::shared_ptr<const std::unordered_set<uint32_t>>;
+using DepotSnapshot = std::shared_ptr<const ConfigurationSnapshot>;
 DepotSnapshot configured;
 void publish(DepotSnapshot value) { std::atomic_store_explicit(&configured, std::move(value), std::memory_order_release); }
 std::string hashFile(const std::filesystem::path& path, std::error_code& error) {
@@ -27,12 +27,14 @@ std::string hashFile(const std::filesystem::path& path, std::error_code& error) 
 }
 }
 std::recursive_mutex& ConfigurationMutex() { return mutex; }
+void DisableConfiguration() { std::lock_guard lock(mutex); ready = false; publish(nullptr); }
 bool HasConfiguredDepot(uint32_t appID) {
     // Steam's ownership hook must not wait for a script's synchronous HTTP
     // callback or Keychain operation on the reload worker.
-    const auto snapshot = std::atomic_load_explicit(&configured, std::memory_order_acquire);
-    return snapshot && snapshot->contains(appID);
+    const auto snapshot = GetConfigurationSnapshot();
+    return snapshot && snapshot->depots.contains(appID);
 }
+std::shared_ptr<const ConfigurationSnapshot> GetConfigurationSnapshot() { return std::atomic_load_explicit(&configured, std::memory_order_acquire); }
 ConfigurationReport MacConfiguration::reload(const std::filesystem::path& steamData) {
     std::lock_guard lock(mutex);
     ConfigurationReport report;
@@ -91,7 +93,10 @@ ConfigurationReport MacConfiguration::reload(const std::filesystem::path& steamD
             report.diagnostics.insert(report.diagnostics.end(), errors.begin(), errors.end()); return report;
         }
         const auto depots = LuaConfig::GetAllDepotIds();
-        publish(std::make_shared<const std::unordered_set<uint32_t>>(depots.begin(), depots.end()));
+        auto snapshot = std::make_shared<ConfigurationSnapshot>();
+        for (const auto id : depots) snapshot->depots.emplace(id, LuaConfig::GetDecryptionKey(id));
+        snapshot->manifestOverrides = LuaConfig::GetManifestOverrides();
+        publish(std::move(snapshot));
         initialized_ = true; root_ = root; configHash_ = configHash; files_ = std::move(files); ready = true;
     }
     report.ready = ready; report.depotCount = LuaConfig::GetAllDepotIds().size();

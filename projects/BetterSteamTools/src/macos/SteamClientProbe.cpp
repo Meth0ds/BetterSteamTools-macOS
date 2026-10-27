@@ -12,6 +12,16 @@ namespace BST::Mac {
 std::optional<SteamClientProbe> probeSteamClient(std::string& diagnostic) {
     constexpr const char* approvedHash = "b9d62be2ac64b77dc77e1d19eefcf3880df99495c7db85b30623095310b6a6bd";
     constexpr uint64_t ownershipRVA = 0xa63738;
+    constexpr uint64_t configStoreGetBinaryRVA = 0x6b8210;
+    constexpr uint64_t buildDepotDependencyRVA = 0x5b0a98;
+    constexpr std::array<uint8_t, 32> buildDepotDependencyEntryBytes = {
+        0xfc, 0x6f, 0xba, 0xa9, 0xfa, 0x67, 0x01, 0xa9, 0xf8, 0x5f, 0x02, 0xa9, 0xf6, 0x57, 0x03, 0xa9,
+        0xf4, 0x4f, 0x04, 0xa9, 0xfd, 0x7b, 0x05, 0xa9, 0xfd, 0x43, 0x01, 0x91, 0xff, 0xc3, 0x08, 0xd1
+    };
+    constexpr std::array<uint8_t, 32> configStoreEntryBytes = {
+        0xf8, 0x5f, 0xbc, 0xa9, 0xf6, 0x57, 0x01, 0xa9, 0xf4, 0x4f, 0x02, 0xa9, 0xfd, 0x7b, 0x03, 0xa9,
+        0xfd, 0xc3, 0x00, 0x91, 0xf3, 0x03, 0x04, 0xaa, 0xf4, 0x03, 0x03, 0xaa, 0xf5, 0x03, 0x02, 0xaa
+    };
     constexpr std::array<uint8_t, 32> entryBytes = {
         0xff, 0x03, 0x04, 0xd1, 0xfc, 0x6f, 0x0a, 0xa9, 0xfa, 0x67, 0x0b, 0xa9, 0xf8, 0x5f, 0x0c, 0xa9,
         0xf6, 0x57, 0x0d, 0xa9, 0xf4, 0x4f, 0x0e, 0xa9, 0xfd, 0x7b, 0x0f, 0xa9, 0xfd, 0xc3, 0x03, 0x91
@@ -40,8 +50,20 @@ std::optional<SteamClientProbe> probeSteamClient(std::string& diagnostic) {
         if (std::memcmp(reinterpret_cast<void*>(*address), entryBytes.data(), entryBytes.size())) {
             diagnostic = "Ownership entry differs from reviewed ARM64 bytes; possible existing instrumentation"; return std::nullopt;
         }
-        diagnostic = "Reviewed SHA-256, segment-relative RVA and 32 entry bytes match";
-        return SteamClientProbe{path, *address, std::move(module)};
+        const auto configAddress = layout->codeAddress(_dyld_get_image_vmaddr_slide(index), configStoreGetBinaryRVA, configStoreEntryBytes.size());
+        if (!configAddress || !OSTPlatform::Apple::IsExecutable(reinterpret_cast<void*>(*configAddress)) ||
+            !OSTPlatform::Memory::IsReadable(reinterpret_cast<void*>(*configAddress), configStoreEntryBytes.size()) ||
+            std::memcmp(reinterpret_cast<void*>(*configAddress), configStoreEntryBytes.data(), configStoreEntryBytes.size())) {
+            diagnostic = "ConfigStore GetBinary RVA or entry differs from reviewed ARM64 code"; return std::nullopt;
+        }
+        const auto manifestAddress = layout->codeAddress(_dyld_get_image_vmaddr_slide(index), buildDepotDependencyRVA, buildDepotDependencyEntryBytes.size());
+        if (!manifestAddress || !OSTPlatform::Apple::IsExecutable(reinterpret_cast<void*>(*manifestAddress)) ||
+            !OSTPlatform::Memory::IsReadable(reinterpret_cast<void*>(*manifestAddress), buildDepotDependencyEntryBytes.size()) ||
+            std::memcmp(reinterpret_cast<void*>(*manifestAddress), buildDepotDependencyEntryBytes.data(), buildDepotDependencyEntryBytes.size())) {
+            diagnostic = "BuildDepotDependency RVA or entry differs from reviewed ARM64 code"; return std::nullopt;
+        }
+        diagnostic = "Reviewed SHA-256, segment-relative RVAs and 32 entry bytes match";
+        return SteamClientProbe{path, *address, *configAddress, *manifestAddress, std::move(module)};
     }
     return std::nullopt;
 }

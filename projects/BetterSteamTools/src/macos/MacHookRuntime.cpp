@@ -1,5 +1,7 @@
 #include "MacHookRuntime.h"
 #include "MacConfiguration.h"
+#include "MacConfigStore.h"
+#include "MacManifestHook.h"
 #include "SteamClientProbe.h"
 #include "RuntimeManifestVerifier.h"
 #include "BSTManifestTrust.h"
@@ -124,12 +126,19 @@ void coordinator() {
                 const bool configured = reloadLuaConfiguration();
                 if (configured && !attached) {
                     std::atomic_ref<void*>(g_original).store(reinterpret_cast<void*>(image->ownershipEntry), std::memory_order_release);
+                    std::atomic_ref<void*>(*BST::Mac::ConfigStoreOriginalSlot()).store(reinterpret_cast<void*>(image->configStoreGetBinaryEntry), std::memory_order_release);
+                    std::atomic_ref<void*>(*BST::Mac::BuildDepotDependencyOriginalSlot()).store(reinterpret_cast<void*>(image->buildDepotDependencyEntry), std::memory_order_release);
                     if (!OSTPlatform::Detour::BeginTransaction()) { log(OSTPlatform::Apple::DetourLastError()); return; }
                     const bool staged = OSTPlatform::Detour::Attach(&g_original, reinterpret_cast<void*>(&checkAppOwnershipHook));
+                    const bool depotStaged = OSTPlatform::Detour::Attach(BST::Mac::ConfigStoreOriginalSlot(), BST::Mac::ConfigStoreReplacement());
+                    const bool manifestStaged = OSTPlatform::Detour::Attach(BST::Mac::BuildDepotDependencyOriginalSlot(), BST::Mac::BuildDepotDependencyReplacement());
                     const bool committed = OSTPlatform::Detour::CommitTransaction();
-                    if (!staged || !committed) { log("CheckAppOwnership hook refused: " + OSTPlatform::Apple::DetourLastError()); return; }
+                    if (!staged || !depotStaged || !manifestStaged || !committed) {
+                        BST::Mac::DisableConfiguration();
+                        log("Ownership/depot hook batch refused: " + OSTPlatform::Apple::DetourLastError()); return;
+                    }
                     attached = true;
-                    log("CheckAppOwnership hook installed for Steam build " + std::string(BST::Mac::steamBuild));
+                    log("CheckAppOwnership, ConfigStore GetBinary and BuildDepotDependency hooks installed for Steam build " + std::string(BST::Mac::steamBuild));
                 }
                 std::this_thread::sleep_for(std::chrono::seconds(2));
             }
