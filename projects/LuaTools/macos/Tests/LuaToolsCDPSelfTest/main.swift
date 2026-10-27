@@ -1,5 +1,5 @@
 import Foundation
-import LuaToolsMacCore
+@_spi(Testing) import LuaToolsMacCore
 
 struct Failure: Error, CustomStringConvertible { let description: String }
 func check(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {
@@ -15,6 +15,11 @@ actor Recorder {
     func event(_ event: BridgeJSON) { if event["method"]?.string == "Fixture.notification" { notifications += 1 } }
     func call(_ method: String, _ args: BridgeJSON) -> BridgeJSON { calls.append((method, args)); return .string("{\"success\":true,\"exists\":true}") }
     func count() -> Int { calls.count }
+}
+actor ServiceReports {
+    private var current: CDPPluginStatus?
+    func record(_ status: CDPPluginStatus) { current = status }
+    func latest() -> CDPPluginStatus? { current }
 }
 
 @main struct CDPSelfTest {
@@ -90,6 +95,38 @@ actor Recorder {
             let dispatcher = PluginRPCDispatcher()
             try await rejects("unknown RPC must fail") { _ = try await dispatcher.call(method: "Unknown", args: .object([:])) }
             try await rejects("AppID traversal must fail") { _ = try await dispatcher.call(method: "DeleteLuaToolsForApp", args: .object(["appid": .string("../../file")])) }
+            _ = try await json(root, "control/navigate")
+            let fixtureRoot = FileManager.default.temporaryDirectory.appendingPathComponent("luatools-service-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+            let plugin = fixtureRoot.appendingPathComponent("plugin/public")
+            try FileManager.default.createDirectory(at: plugin.appendingPathComponent("themes"), withIntermediateDirectories: true)
+            try "window.__fixtureFrontend = true; window.__LuaToolsInjected = true;".write(to: plugin.appendingPathComponent("luatools.js"), atomically: true, encoding: .utf8)
+            try "body {}".write(to: plugin.appendingPathComponent("steamdb-webkit.css"), atomically: true, encoding: .utf8)
+            try #"[{"value":"original"}]"#.write(to: plugin.appendingPathComponent("themes/themes.json"), atomically: true, encoding: .utf8)
+            try ":root {}".write(to: plugin.appendingPathComponent("themes/original.css"), atomically: true, encoding: .utf8)
+            let paths = SteamMacPaths(steamApp: fixtureRoot.appendingPathComponent("Steam.app"), userData: fixtureRoot)
+            let service = LuaToolsBackgroundService(installer: LuaInstaller(paths: paths), pluginDirectory: plugin.deletingLastPathComponent(), port: 0,
+                                                    inspectorEndpoint: root.appendingPathComponent("json"), inspectorAuthorizer: { _ in })
+            let reports = ServiceReports()
+            let localPort = try await service.start { await reports.record($0) }
+            let (health, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(localPort)/health")!)
+            let healthJSON = try JSONDecoder().decode(BridgeJSON.self, from: health)
+            try check((response as? HTTPURLResponse)?.statusCode == 200 && healthJSON["service"]?.string == "luatools", "service owns the real local API")
+            try await Task.sleep(for: .milliseconds(400))
+            let before = try await json(root, "stats")["frontends"]?.integer ?? 0
+            try check(before > 0, "service starts the LuaLoader CDP injector")
+            try "window.__fixtureFrontend = true; window.__LuaToolsInjected = true; // updated".write(to: plugin.appendingPathComponent("luatools.js"), atomically: true, encoding: .utf8)
+            await service.refreshPlugin()
+            try await Task.sleep(for: .milliseconds(1200))
+            let pending = await reports.latest()
+            let still = try await json(root, "stats")["frontends"]?.integer ?? 0
+            try check(pending?.pendingReloadTabs == 1 && still == before, "updated frontend waits for navigation without duplicate injection")
+            _ = try await json(root, "control/navigate")
+            try await Task.sleep(for: .milliseconds(1200))
+            let after = try await json(root, "stats")["frontends"]?.integer ?? 0
+            let reloaded = await reports.latest()
+            try check(after > before && reloaded?.pendingReloadTabs == 0, "navigation applies the updated plugin assets")
+            await service.stop()
             print("PASS: real WebSocket CDP correlation, notifications, cancellation, timeout, disconnect, origin/context isolation, navigation, LuaLoader selection and reconnect")
         } catch { fputs("FAIL: \(error)\n", stderr); exit(1) }
     }

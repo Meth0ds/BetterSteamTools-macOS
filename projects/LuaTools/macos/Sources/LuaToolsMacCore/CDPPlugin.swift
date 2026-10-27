@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 private final class InspectorHTTPPolicy: NSObject, URLSessionTaskDelegate, Sendable {
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
@@ -82,8 +83,11 @@ public actor CDPPluginSession {
         if nonce != nextNonce { lastCallID = 0 }
         nonce = nextNonce
         if transport == "cdp" {
-            let script = "(() => { if (location.origin !== 'https://store.steampowered.com') return false; if (!window.__LuaToolsInjected) { try {\n" + frontend + "\n} catch (error) { delete window.__LuaToolsInjected; delete window.__LuaToolsReady; throw error; } } return window.__LuaToolsInjected === true; })()"
-            guard try await connection.evaluate(script).bool == true else { throw CDPError.script("LuaTools frontend did not confirm installation") }
+            let digest = SHA256.hash(data: Data(frontend.utf8)).map { String(format: "%02x", $0) }.joined()
+            let script = "(() => { if (location.origin !== 'https://store.steampowered.com') return {installed:false}; const wanted='\(digest)'; if (!window.__LuaToolsInjected) { try {\n" + frontend + "\nif (window.__LuaToolsInjected === true) window.__LuaToolsMacFrontendDigest = wanted; } catch (error) { delete window.__LuaToolsInjected; delete window.__LuaToolsReady; throw error; } } return {installed: window.__LuaToolsInjected === true, digest: window.__LuaToolsMacFrontendDigest || ''}; })()"
+            let result = try await connection.evaluate(script)
+            guard result["installed"]?.bool == true else { throw CDPError.script("LuaTools frontend did not confirm installation") }
+            if result["digest"]?.string != digest { return "cdp-pending" }
         }
         return transport
     }
@@ -131,6 +135,10 @@ public actor CDPPluginSession {
 public struct CDPPluginStatus: Sendable, Equatable {
     public let cdpTabs: Int
     public let errors: [String]
+    public let pendingReloadTabs: Int
+    public init(cdpTabs: Int, errors: [String], pendingReloadTabs: Int = 0) {
+        self.cdpTabs = cdpTabs; self.errors = errors; self.pendingReloadTabs = pendingReloadTabs
+    }
 }
 
 /// Refreshes the CURRENT document, rather than treating a tab ID as proof of injection.
@@ -144,6 +152,7 @@ public actor LuaLoaderCDPInjector {
     private let http: URLSession
     private var targets: [String: Target] = [:]
     private var worker: Task<Void, Never>?
+    private var frontend = ""
     private var syncing = false
     private var generation: UInt64 = 0
     private var stopped = false
@@ -190,7 +199,7 @@ public actor LuaLoaderCDPInjector {
         for id in Array(targets.keys) where targets[id]?.url != active[id] {
             if let old = targets.removeValue(forKey: id) { await old.session.close() }
         }
-        var cdp = 0, errors: [String] = []
+        var cdp = 0, pending = 0, errors: [String] = []
         for (id, url) in active.sorted(by: { $0.key < $1.key }) {
             try Task.checkCancellation()
             guard generation == epoch, !stopped else { throw CDPError.closed }
@@ -203,6 +212,7 @@ public actor LuaLoaderCDPInjector {
                 guard generation == epoch, !stopped else { await target.session.close(); throw CDPError.closed }
                 switch transport {
                 case "cdp": cdp += 1
+                case "cdp-pending": cdp += 1; pending += 1
                 default: break
                 }
             } catch {
@@ -210,19 +220,22 @@ public actor LuaLoaderCDPInjector {
                 if let failed = targets.removeValue(forKey: id) { await failed.session.close() }
             }
         }
-        return CDPPluginStatus(cdpTabs: cdp, errors: errors)
+        return CDPPluginStatus(cdpTabs: cdp, errors: errors, pendingReloadTabs: pending)
     }
     public func start(frontend: String, report: @escaping @Sendable (CDPPluginStatus) async -> Void) {
         guard worker == nil, !stopped else { return }
+        self.frontend = frontend
         worker = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                do { await report(try await self.synchronize(frontend: frontend)) }
+                do { await report(try await self.synchronize(frontend: await self.currentFrontend())) }
                 catch { await report(CDPPluginStatus(cdpTabs: 0, errors: [error.localizedDescription])); await self.discardTargets() }
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
     }
+    public func updateFrontend(_ frontend: String) { self.frontend = frontend }
+    private func currentFrontend() -> String { frontend }
     private func discardTargets() async {
         let previous = targets; targets.removeAll()
         for target in previous.values { await target.session.close() }

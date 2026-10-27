@@ -99,8 +99,11 @@ public final class LocalAPIServer: @unchecked Sendable {
     private var connections: [UUID: NWConnection] = [:]
     private var startup: CheckedContinuation<UInt16, Error>?
     private var started = false
-    public init(installer: LuaInstaller = LuaInstaller(), port: UInt16 = 6767) throws {
-        self.router = LocalAPIRouter(installer: installer)
+    public convenience init(installer: LuaInstaller = LuaInstaller(), port: UInt16 = 6767) throws {
+        try self.init(router: LocalAPIRouter(installer: installer), port: port)
+    }
+    public init(router: LocalAPIRouter, port: UInt16 = 6767) throws {
+        self.router = router
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: NWEndpoint.Port(rawValue: port)!)
         self.listener = try NWListener(using: parameters)
@@ -128,11 +131,17 @@ public final class LocalAPIServer: @unchecked Sendable {
         }
     }
     public func stop() {
-        queue.async {
-            self.listener.cancel()
-            for connection in self.connections.values { connection.cancel() }
-            self.connections.removeAll()
+        queue.async { self.cancelOnQueue() }
+    }
+    public func stopAndWait() async {
+        await withCheckedContinuation { continuation in
+            queue.async { self.cancelOnQueue(); continuation.resume() }
         }
+    }
+    private func cancelOnQueue() {
+        listener.cancel()
+        for connection in connections.values { connection.cancel() }
+        connections.removeAll()
     }
     private func accept(_ connection: NWConnection) {
         guard connections.count < 32 else { connection.cancel(); return }

@@ -8,6 +8,7 @@ Usage: python fake_inspector.py -- <path-to-LuaToolsCDPSelfTest>
 """
 import asyncio
 import json
+import re
 import sys
 from http import HTTPStatus
 from urllib.parse import urlsplit
@@ -24,6 +25,7 @@ class Fixture:
         self.mode = "cdp"
         self.context = 7
         self.nonce = "fixture-nonce-7"
+        self.frontend_digest = None
         self.sockets = set()
         self.stats = {"connections": 0, "frontends": 0, "replies": [], "handshakes": 0}
 
@@ -47,6 +49,7 @@ class Fixture:
             if action == "navigate":
                 self.context += 1
                 self.nonce = f"fixture-nonce-{self.context}"
+                self.frontend_digest = None
                 for socket in list(self.sockets):
                     await socket.send(json.dumps({"method": "Runtime.executionContextsCleared", "params": {}}))
                     await self.contexts(socket)
@@ -73,8 +76,11 @@ class Fixture:
         base = {"nonce": self.nonce, "id": 1, "method": "HasLuaToolsForApp", "args": {"appid": 42}}
         for context, payload in [(self.context, base), (self.context, base), (700, {**base, "id": 2}), (701, {**base, "id": 3}),
                                  (self.context, {**base, "id": 4, "nonce": "stale-document"})]:
-            await socket.send(json.dumps({"method": "Runtime.bindingCalled", "params": {
-                "name": "__LuaToolsMacRPC", "executionContextId": context, "payload": json.dumps(payload)}}))
+            try:
+                await socket.send(json.dumps({"method": "Runtime.bindingCalled", "params": {
+                    "name": "__LuaToolsMacRPC", "executionContextId": context, "payload": json.dumps(payload)}}))
+            except ConnectionClosed:
+                return
 
     async def message(self, socket, request):
         identifier, method = request["id"], request["method"]
@@ -109,9 +115,13 @@ class Fixture:
                 self.stats["replies"].append({"context": params.get("contextId"), **payload})
                 result = {"result": {"value": True}}
             elif "__fixtureFrontend" in expression:
-                self.stats["frontends"] += 1
-                result = {"result": {"value": self.mode != "broken"}}
-                if self.mode == "cdp":
+                wanted = re.search(r"const wanted='([0-9a-f]{64})'", expression)
+                assert wanted, "frontend digest missing"
+                if self.mode != "broken" and self.frontend_digest is None:
+                    self.frontend_digest = wanted.group(1)
+                    self.stats["frontends"] += 1
+                result = {"result": {"value": {"installed": self.mode != "broken", "digest": self.frontend_digest or ""}}}
+                if self.mode == "cdp" and self.frontend_digest == wanted.group(1):
                     asyncio.create_task(self.bindings(socket))
             else:
                 raise AssertionError(f"unexpected evaluation: {expression[:100]}")

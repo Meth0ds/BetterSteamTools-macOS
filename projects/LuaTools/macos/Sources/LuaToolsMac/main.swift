@@ -18,16 +18,25 @@ struct LuaToolsMacApp: App {
     @Published var selected: LuaToolsSection = .overview
     private let paths = SteamMacPaths.detected
     private let installer = LuaInstaller()
-    private var api: LocalAPIServer?
-    private var injector: LuaLoaderCDPInjector?
+    private var service: LuaToolsBackgroundService?
     init() {
-        do { try installer.recoverPendingTransactions() }
-        catch { status = "La recuperación de Lua y depots requiere atención: \(error.localizedDescription)" }
-        do { api = try LocalAPIServer(installer: installer) }
-        catch { status = "No se pudo preparar el servidor local: \(error.localizedDescription)" }
-        Task {
-            do { if let api { _ = try await api.start() }; await connectPlugin() }
-            catch { status = "No se pudo abrir el servidor local: \(error.localizedDescription)" }
+        Task { await startLocalService() }
+    }
+    private func startLocalService() async {
+        if await LuaToolsServiceDiscovery.isRunning() {
+            status = "Servicio de LuaTools activo en segundo plano"
+            pluginStatus = "El servicio está sincronizando LuaLoader con Steam"
+            return
+        }
+        let local = LuaToolsBackgroundService(installer: installer)
+        do {
+            _ = try await local.start { [weak self] report in await self?.showPluginStatus(report) }
+            service = local
+        } catch {
+            if await LuaToolsServiceDiscovery.isRunning() {
+                status = "Servicio de LuaTools activo en segundo plano"
+                pluginStatus = "El servicio está sincronizando LuaLoader con Steam"
+            } else { status = "No se pudo iniciar el servicio local: \(error.localizedDescription)" }
         }
     }
     func refresh() {
@@ -59,8 +68,17 @@ struct LuaToolsMacApp: App {
         catch { status = "No se pudo activar BetterSteamTools: \(error.localizedDescription)" }
     }
     func installAgent() {
-        do { let url = try LaunchAgentInstaller().install(executable: Bundle.main.executableURL ?? URL(fileURLWithPath: "/usr/bin/true")); status = "LaunchAgent instalado en \(url.path)" }
-        catch { status = "No se pudo instalar el LaunchAgent: \(error.localizedDescription)" }
+        Task {
+            let daemon = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/LuaToolsDaemon")
+            guard FileManager.default.isExecutableFile(atPath: daemon.path) else { status = "La aplicación no incluye LuaToolsDaemon"; return }
+            if let service { await service.stop(); self.service = nil }
+            do { let url = try LaunchAgentInstaller().install(executable: daemon); status = "LaunchAgent instalado en \(url.path)" }
+            catch {
+                let message = error.localizedDescription
+                await startLocalService()
+                status = "No se pudo instalar el LaunchAgent: \(message)"
+            }
+        }
     }
     func injectCDP() { Task { await connectPlugin() } }
     func launchSteamForPlugin() {
@@ -73,19 +91,14 @@ struct LuaToolsMacApp: App {
         } catch { status = "No se pudo preparar LuaLoader: \(error.localizedDescription)" }
     }
     private func connectPlugin() async {
-        do {
-            let script = try PluginFrontend(pluginDirectory: PluginInstaller().destination).script
-            if let injector { await injector.stop() }
-            let transport = try LuaLoaderCDPInjector()
-            injector = transport
-            await transport.start(frontend: script) { [weak self] report in
-                await self?.showPluginStatus(report)
-            }
-        } catch { pluginStatus = "No se pudo conectar el plugin: \(error.localizedDescription)" }
+        if let service { await service.refreshPlugin() }
+        else if await LuaToolsServiceDiscovery.isRunning() { pluginStatus = "El servicio en segundo plano está sincronizando LuaLoader" }
+        else { pluginStatus = "El servicio de LuaTools no está disponible" }
     }
     private func showPluginStatus(_ report: CDPPluginStatus) {
         if let error = report.errors.first { pluginStatus = "Esperando al inspector de Steam: \(error)" }
         else if report.cdpTabs == 0 { pluginStatus = "Esperando a la tienda de Steam" }
+        else if report.pendingReloadTabs > 0 { pluginStatus = "Actualización lista; recarga la tienda para aplicarla" }
         else { pluginStatus = "LuaLoader · Plugin conectado en \(report.cdpTabs) pestaña(s)" }
     }
     func installPlugin() {

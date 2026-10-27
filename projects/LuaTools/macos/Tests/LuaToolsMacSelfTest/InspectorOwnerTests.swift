@@ -35,3 +35,17 @@ func testLiveListenerOwnership(port: UInt16) throws {
     catch { return }
     throw TestFailure(description: "A test process must never be authorized as native Steam")
 }
+
+func testServiceOwnerPaths(root: URL) throws {
+    let bundle = root.appendingPathComponent("LuaTools.app")
+    let daemon = bundle.appendingPathComponent("Contents/MacOS/LuaToolsDaemon")
+    try FileManager.default.createDirectory(at: daemon.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("fixture".utf8).write(to: daemon)
+    let owner = InspectorListenerOwner(pid: getpid(), executable: daemon.path, loopbackOnly: true)
+    try check(LuaToolsServiceDiscovery.isTrustedOwner(owner, appBundle: bundle), "bundled daemon listener is recognized")
+    try check(!LuaToolsServiceDiscovery.isTrustedOwner(.init(pid: getpid(), executable: daemon.path, loopbackOnly: false), appBundle: bundle), "non-loopback service rejected")
+    let foreign = root.appendingPathComponent("foreign/LuaToolsDaemon")
+    try FileManager.default.createDirectory(at: foreign.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("fixture".utf8).write(to: foreign)
+    try check(!LuaToolsServiceDiscovery.isTrustedOwner(.init(pid: getpid(), executable: foreign.path, loopbackOnly: true), appBundle: bundle), "same filename outside the app is rejected")
+}
