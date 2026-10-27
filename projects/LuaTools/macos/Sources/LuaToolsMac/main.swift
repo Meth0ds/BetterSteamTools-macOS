@@ -63,6 +63,15 @@ struct LuaToolsMacApp: App {
         catch { status = "No se pudo instalar el LaunchAgent: \(error.localizedDescription)" }
     }
     func injectCDP() { Task { await connectPlugin() } }
+    func launchSteamForPlugin() {
+        do {
+            switch try SteamInspectorLauncher(paths: paths).start() {
+            case .launched: status = "Steam iniciado con el inspector de LuaLoader"
+            case .inspectorAvailable: status = "El inspector de Steam ya está disponible"; injectCDP()
+            case .restartRequired: status = "Cierra Steam y usa esta acción para abrirlo con LuaLoader"
+            }
+        } catch { status = "No se pudo preparar LuaLoader: \(error.localizedDescription)" }
+    }
     private func connectPlugin() async {
         do {
             let script = try PluginFrontend(pluginDirectory: PluginInstaller().destination).script
@@ -114,7 +123,7 @@ struct ContentView: View {
                 Text("Gestiona Steam desde macOS").font(.largeTitle.bold())
                 Text("LuaTools conserva el flujo de Windows y usa NotProton solo cuando un juego necesita CrossOver.").foregroundStyle(.secondary)
                 HStack { statusCard("Steam", "steam", FileManager.default.fileExists(atPath: SteamMacPaths.detected.infoPlist.path) ? "Detectado" : "No encontrado"); statusCard("Plugin", "puzzlepiece.extension", model.pluginStatus) }
-                GroupBox("Acciones rápidas") { HStack { Button("Activar BetterSteamTools", action: model.activateBST); Button("Conectar plugin", action: model.injectCDP); Button("LaunchAgent", action: model.installAgent); Spacer() }.padding(8) }
+                GroupBox("Acciones rápidas") { HStack { Button("Activar BetterSteamTools", action: model.activateBST); Button("Abrir Steam para LuaLoader", action: model.launchSteamForPlugin); Button("Conectar plugin", action: model.injectCDP); Button("LaunchAgent", action: model.installAgent); Spacer() }.padding(8) }
                 Text(model.status).foregroundStyle(.secondary)
             }
         case .games:

@@ -1,0 +1,34 @@
+{
+  "format": "analysis-only",
+  "runtimeApproved": false,
+  "steamBuild": "1792618285",
+  "architecture": "arm64",
+  "steamclient": {
+    "sha256": "b9d62be2ac64b77dc77e1d19eefcf3880df99495c7db85b30623095310b6a6bd",
+    "evidence": {
+      "debugFlag": "-cef-enable-debugging",
+      "debugFlagDescription": "enables Chromium remote debugging, defaulting to localhost:8080",
+      "flagRegistrationRVA": "0xd0290",
+      "flagDecisionRVA": "0xcda80",
+      "launchArgumentConstructionRVA": "0xc6a4c",
+      "loopbackArgument": "--remote-debugging-address=127.0.0.1",
+      "portArgument": "-devtools-port",
+      "defaultPort": "8080"
+    }
+  },
+  "steamui": {
+    "sha256": "80d66dc75fad384f06898c450addefb1e32a016993d32a3ca93ea300f3efbb3f",
+    "evidence": {
+      "debugMarker": ".cef-enable-remote-debugging",
+      "readFunctionRVA": "0x570fbc",
+      "writeFunctionRVA": "0x5710f8",
+      "readCalls": "BFileExists Yielding IO Job"
+    }
+  },
+  "validationRequired": [
+    "Launch native Steam with the documented debug arguments and verify the listener owner and loopback binding",
+    "Prove store and library frontend behavior through LuaLoader CDP",
+    "Determine whether the marker alone enables the native launch path",
+    "Verify behavior alongside NotProton and other injectors"
+  ]
+}

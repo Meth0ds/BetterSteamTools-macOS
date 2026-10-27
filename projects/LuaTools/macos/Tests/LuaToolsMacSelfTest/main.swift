@@ -246,6 +246,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             try testParser()
             try testPluginAssets(root: root)
             try testInspectorOwnerPaths(root: root)
+            try testSteamInspectorLauncher(root: root)
             let installer = try testInstallerAndRoutes(root: root)
             try testZipPackage(root: root)
             try testPackageTransactionCrashRecovery(root: root)
