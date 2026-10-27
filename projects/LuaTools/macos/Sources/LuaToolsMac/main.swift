@@ -21,6 +21,8 @@ struct LuaToolsMacApp: App {
     private var api: LocalAPIServer?
     private var injector: LuaLoaderCDPInjector?
     init() {
+        do { try installer.recoverPendingTransactions() }
+        catch { status = "La recuperación de Lua y depots requiere atención: \(error.localizedDescription)" }
         do { api = try LocalAPIServer(installer: installer) }
         catch { status = "No se pudo preparar el servidor local: \(error.localizedDescription)" }
         Task {

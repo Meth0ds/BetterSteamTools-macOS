@@ -24,8 +24,8 @@ struct ConfigurationReport {
     size_t depotCount = 0;
     std::vector<LuaSupport::Diagnostic> diagnostics;
 };
-// The shared Lua interpreter is serialized with every native hook query.
-// Future native manifest/ticket hooks must use this same mutex and ready gate.
+// Reloads serialize access to the shared interpreter. Hook threads read the
+// immutable snapshot; future hooks must use the same ready gate and publication.
 std::recursive_mutex& ConfigurationMutex();
 bool HasConfiguredDepot(uint32_t appID);
 void DisableConfiguration();

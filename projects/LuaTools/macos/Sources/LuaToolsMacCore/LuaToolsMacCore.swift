@@ -92,7 +92,7 @@ public final class LuaInstaller: @unchecked Sendable {
         let fm = FileManager.default
         try fm.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
         let destination = paths.stPlugin.appendingPathComponent("\(appID).lua")
-        try atomicReplace(contents, at: destination)
+        try PackageTransaction(paths: paths).apply([.init(relativePath: "config/stplug-in/\(appID).lua", data: contents)])
         return LuaInstallResult(appID: appID, luaURL: destination, manifests: 0)
     }
     public func installZip(appID: Int, zip: URL) throws -> LuaInstallResult {
@@ -119,27 +119,14 @@ public final class LuaInstaller: @unchecked Sendable {
         try FileManager.default.createDirectory(at: paths.stPlugin, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: paths.depotCache, withIntermediateDirectories: true)
         let luaDestination = paths.stPlugin.appendingPathComponent("\(appID).lua")
-        let destinations = [(luaDestination, luaData)] + manifests.map { (paths.depotCache.appendingPathComponent($0.fileName), $0.bytes) }
-        var old: [(URL, Data?)] = []
-        do {
-            for (destination, _) in destinations {
-                guard try noSymlink(destination, within: destination.deletingLastPathComponent()) else { throw LuaToolsError.unsafeArchive }
-                do { old.append((destination, try regularExistingData(destination))) }
-                catch { throw LuaToolsError.transactionFailed("inspect \(destination.path): \(error.localizedDescription)") }
-            }
-            for (destination, data) in destinations {
-                do { try atomicReplace(data, at: destination) }
-                catch { throw LuaToolsError.transactionFailed("\(destination.path): \(error.localizedDescription)") }
-            }
-        } catch {
-            for (index, (destination, previous)) in old.enumerated() {
-                if let previous { try? atomicReplace(previous, at: destination) }
-                else { try? FileManager.default.removeItem(at: destination) }
-                _ = index
-            }
-            throw LuaToolsError.transactionFailed(String(describing: error))
-        }
+        let writes = [PackageTransaction.Write(relativePath: "config/stplug-in/\(appID).lua", data: luaData)] + manifests.map { .init(relativePath: "depotcache/\($0.fileName)", data: $0.bytes) }
+        try PackageTransaction(paths: paths).apply(writes)
         return LuaInstallResult(appID: appID, luaURL: luaDestination, manifests: manifests.count)
+    }
+    public func recoverPendingTransactions() throws {
+        lock.lock(); defer { lock.unlock() }
+        guard FileManager.default.fileExists(atPath: paths.userData.appendingPathComponent("config").path) else { return }
+        try PackageTransaction(paths: paths).recover()
     }
     public func hasLua(appID: Int) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -148,6 +135,7 @@ public final class LuaInstaller: @unchecked Sendable {
     public func removeLua(appID: Int) throws {
         lock.lock(); defer { lock.unlock() }
         guard appID > 0, appID <= Int(UInt32.max) else { throw LuaToolsError.invalidRequest }
+        try recoverPendingTransactions()
         let url = paths.stPlugin.appendingPathComponent("\(appID).lua")
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
     }
@@ -161,28 +149,6 @@ public final class LuaInstaller: @unchecked Sendable {
         let data = try file.read(upToCount: maximum + 1) ?? Data()
         guard data.count <= maximum else { throw LuaToolsError.archiveTooLarge }
         return data
-    }
-    private func regularExistingData(_ url: URL) throws -> Data? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try boundedData(url, maximum: 64 * 1024 * 1024)
-    }
-    private func atomicReplace(_ data: Data, at destination: URL) throws {
-        guard FileManager.default.fileExists(atPath: destination.deletingLastPathComponent().path) else {
-            throw LuaToolsError.transactionFailed("destination directory missing: \(destination.deletingLastPathComponent().path)")
-        }
-        try data.write(to: destination, options: .atomic)
-    }
-    private func noSymlink(_ url: URL, within root: URL) throws -> Bool {
-        var cursor = url
-        while cursor.path.hasPrefix(root.path) {
-            if FileManager.default.fileExists(atPath: cursor.path) {
-                let values = try cursor.resourceValues(forKeys: [.isSymbolicLinkKey])
-                if values.isSymbolicLink == true { return false }
-            }
-            if cursor == root { break }
-            cursor.deleteLastPathComponent()
-        }
-        return true
     }
 }
 
@@ -204,7 +170,7 @@ public enum LuaToolsError: LocalizedError {
         case .unsafeArchive: "El ZIP contiene rutas, enlaces o archivos no permitidos."
         case .archiveConflict: "El paquete contiene nombres de depot duplicados o incompatibles."
         case .archiveTooLarge: "El paquete supera el tamaño máximo permitido."
-        case .transactionFailed(let detail): "No se pudo instalar el paquete y se restauró el estado anterior: \(detail)"
+        case .transactionFailed(let detail): "No se pudo completar la transacción: \(detail)"
         }
     }
 }
