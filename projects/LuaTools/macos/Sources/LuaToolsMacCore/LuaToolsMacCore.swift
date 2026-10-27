@@ -190,30 +190,6 @@ public struct SteamActivation: Sendable {
     }
 }
 
-public struct PluginInstaller: Sendable {
-    public let destination: URL
-    public init(destination: URL? = nil) {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        let override = ProcessInfo.processInfo.environment["LUA_TOOLS_PLUGIN_DIR"].map { URL(fileURLWithPath: $0) }
-        self.destination = destination ?? override ?? home.appendingPathComponent("Library/Application Support/LuaToolsMac/plugin", isDirectory: true)
-    }
-    public var activeDirectory: URL {
-        if FileManager.default.fileExists(atPath: destination.appendingPathComponent("public/luatools.js").path) { return destination }
-        if let resources = Bundle.main.resourceURL {
-            let bundled = resources.appendingPathComponent("plugin-macos", isDirectory: true)
-            if FileManager.default.fileExists(atPath: bundled.appendingPathComponent("public/luatools.js").path) { return bundled }
-        }
-        return destination
-    }
-    public func install(zip: URL, expectedSHA256: String? = nil) throws {
-        if let expectedSHA256, sha256(url: zip) != expectedSHA256.lowercased() { throw LuaToolsError.invalidRequest }
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
-        try Shell.run("/usr/bin/unzip", ["-q", "-o", zip.path, "-d", destination.path])
-    }
-    private func sha256(url: URL) -> String { (try? SHA256.hash(data: Data(contentsOf: url))).map { $0.map { String(format: "%02x", $0) }.joined() } ?? "" }
-}
-
-
 public enum Shell {
     @discardableResult public static func run(_ executable: String, _ arguments: [String], environment: [String: String] = [:]) throws -> String {
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments

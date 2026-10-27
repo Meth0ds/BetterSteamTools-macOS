@@ -96,15 +96,25 @@ struct LuaToolsMacApp: App {
         else { pluginStatus = "El servicio de LuaTools no está disponible" }
     }
     private func showPluginStatus(_ report: CDPPluginStatus) {
-        if let error = report.errors.first { pluginStatus = "Esperando al inspector de Steam: \(error)" }
+        if report.disabled { pluginStatus = "No hay plugin activo; recarga la tienda de Steam" }
+        else if let error = report.errors.first { pluginStatus = "Esperando al inspector de Steam: \(error)" }
         else if report.cdpTabs == 0 { pluginStatus = "Esperando a la tienda de Steam" }
         else if report.pendingReloadTabs > 0 { pluginStatus = "Actualización lista; recarga la tienda para aplicarla" }
         else { pluginStatus = "LuaLoader · Plugin conectado en \(report.cdpTabs) pestaña(s)" }
     }
     func installPlugin() {
-        guard let raw = ProcessInfo.processInfo.environment["LUA_TOOLS_MAC_PLUGIN_ZIP"] else { status = "Define LUA_TOOLS_MAC_PLUGIN_ZIP con plugin-macos.zip"; return }
-        do { try PluginInstaller().install(zip: URL(fileURLWithPath: raw)); status = "Plugin LuaTools instalado"; Task { await connectPlugin() } }
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.zip]; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        do { try PluginInstaller().install(zip: source); status = "Plugin LuaTools instalado"; Task { await connectPlugin() } }
         catch { status = "No se pudo instalar el plugin: \(error.localizedDescription)" }
+    }
+    func rollbackPlugin() {
+        do { try PluginInstaller().rollback(); status = "Versión anterior del plugin restaurada"; Task { await connectPlugin() } }
+        catch { status = "No se pudo restaurar el plugin: \(error.localizedDescription)" }
+    }
+    func uninstallPlugin() {
+        do { try PluginInstaller().uninstall(); status = "Plugin desactivado; recarga la tienda de Steam para retirar la versión visible"; Task { await connectPlugin() } }
+        catch { status = "No se pudo desactivar el plugin: \(error.localizedDescription)" }
     }
 }
 
@@ -144,7 +154,7 @@ struct ContentView: View {
         case .lua:
             VStack(alignment: .leading, spacing: 16) { Text("Lua y depots").font(.title2.bold()); Text("Los Lua se guardan en stplug-in y los manifests binarios en depotcache, sin cambiar el formato de Windows.").foregroundStyle(.secondary); HStack { TextField("AppID", text: $model.appID).textFieldStyle(.roundedBorder).frame(width: 170); Button("Comprobar", action: model.installLua); Button("Instalar Lua", action: model.installLuaFromPanel); Button("Instalar ZIP", action: model.installPackage) }; GroupBox("Rutas") { VStack(alignment: .leading) { Text(SteamMacPaths.detected.stPlugin.path); Text(SteamMacPaths.detected.depotCache.path) }.font(.caption.monospaced()).padding(8) } }
         case .operations:
-            VStack(alignment: .leading, spacing: 16) { Text("Operaciones").font(.title2.bold()); GroupBox("Servicios") { VStack(alignment: .leading) { Button("Instalar LaunchAgent", action: model.installAgent); Text("API local: 127.0.0.1:6767").foregroundStyle(.secondary) }.padding(8) }; Text(model.pluginStatus).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 16) { Text("Operaciones").font(.title2.bold()); GroupBox("Servicios") { VStack(alignment: .leading) { Button("Instalar LaunchAgent", action: model.installAgent); Text("API local: 127.0.0.1:6767").foregroundStyle(.secondary) }.padding(8) }; GroupBox("Plugin LuaTools") { HStack { Button("Instalar ZIP", action: model.installPlugin); Button("Restaurar versión anterior", action: model.rollbackPlugin); Button("Desactivar", action: model.uninstallPlugin) }.padding(8) }; Text(model.pluginStatus).foregroundStyle(.secondary) }
         case .settings:
             Form { Section("Compatibilidad") { Text("El plugin utiliza LuaLoader y el servicio local de LuaTools."); Text("NotProton no descarga CrossOver ni modifica licencias.").foregroundStyle(.secondary) } }.formStyle(.grouped)
         }

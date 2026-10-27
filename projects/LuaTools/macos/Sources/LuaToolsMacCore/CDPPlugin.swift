@@ -136,8 +136,9 @@ public struct CDPPluginStatus: Sendable, Equatable {
     public let cdpTabs: Int
     public let errors: [String]
     public let pendingReloadTabs: Int
-    public init(cdpTabs: Int, errors: [String], pendingReloadTabs: Int = 0) {
-        self.cdpTabs = cdpTabs; self.errors = errors; self.pendingReloadTabs = pendingReloadTabs
+    public let disabled: Bool
+    public init(cdpTabs: Int, errors: [String], pendingReloadTabs: Int = 0, disabled: Bool = false) {
+        self.cdpTabs = cdpTabs; self.errors = errors; self.pendingReloadTabs = pendingReloadTabs; self.disabled = disabled
     }
 }
 

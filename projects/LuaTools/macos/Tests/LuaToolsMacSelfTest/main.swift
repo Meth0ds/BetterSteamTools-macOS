@@ -220,6 +220,11 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
 
 @main struct SelfTest {
     static func main() async {
+        if CommandLine.arguments.count == 6, CommandLine.arguments[1] == "--plugin-crash", let point = Int(CommandLine.arguments[5]) {
+            do { try pluginCrashChild(destination: URL(fileURLWithPath: CommandLine.arguments[2]), archive: URL(fileURLWithPath: CommandLine.arguments[3]), operation: CommandLine.arguments[4], stop: point) }
+            catch { fputs("plugin child failed: \(error)\n", stderr); exit(1) }
+            return
+        }
         if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--transaction-hold" {
             do { try transactionHoldingChild(root: URL(fileURLWithPath: CommandLine.arguments[2])) }
             catch { fputs("transaction child failed: \(error)\n", stderr); exit(1) }
@@ -245,6 +250,7 @@ func fragmentedTCP(port: UInt16) async throws -> Data {
             defer { try? FileManager.default.removeItem(at: root) }
             try testParser()
             try testPluginAssets(root: root)
+            try testPluginInstaller(root: root)
             try testInspectorOwnerPaths(root: root)
             try testServiceOwnerPaths(root: root)
             try testSteamInspectorLauncher(root: root)

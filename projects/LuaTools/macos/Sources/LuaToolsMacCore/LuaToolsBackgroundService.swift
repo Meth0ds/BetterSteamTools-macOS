@@ -51,7 +51,18 @@ public actor LuaToolsBackgroundService {
         refreshing = true; defer { refreshing = false }
         let epoch = generation
         do {
-            let script = try PluginFrontend(pluginDirectory: pluginDirectory ?? PluginInstaller().activeDirectory).script
+            guard let directory = try pluginDirectory ?? PluginInstaller().resolveActiveDirectory() else {
+                injectorRevision &+= 1
+                if let injector { self.injector = nil; await injector.stop() }
+                guard generation == epoch, server != nil else { return }
+                activeDigest = nil
+                if lastError != "plugin-disabled" {
+                    lastError = "plugin-disabled"
+                    await report?(CDPPluginStatus(cdpTabs: 0, errors: [], disabled: true))
+                }
+                return
+            }
+            let script = try PluginFrontend(pluginDirectory: directory).script
             let digest = Data(SHA256.hash(data: Data(script.utf8)))
             guard digest != activeDigest else { return }
             if let injector {
